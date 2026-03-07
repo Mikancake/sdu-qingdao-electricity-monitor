@@ -1,16 +1,16 @@
-# 🔋 山东大学宿舍电费不足预警脚本
+# 🔋 山东大学宿舍电量监控脚本
 
 <div align="center">
 
 **自动监控宿舍电量，低电量及时邮件告警**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.md)
 [![Debian](https://img.shields.io/badge/Debian-11/12-red.svg)](https://www.debian.org/)
 
 
 </div>
----
+
 
 ## 📖 项目简介
 
@@ -21,7 +21,7 @@
 - 🔔 **智能限流**：同一状态最多发送 3 次警告，避免过度打扰
 - 📁 **配置分离**：所有参数通过 YAML 配置文件管理，无需修改代码
 
-适用于山东大学青岛校区宿舍，济南和威海校区可参考修改。
+适用于山东大学青岛校区宿舍电控系统，济南和威海校区可参考修改后使用。
 
 
 
@@ -108,10 +108,10 @@
 
 
 ### 步骤 6：验证 Token 与信息有效性
-```
+
 1. 将获取到的Token和信息依次填入nettest.py对应位置
 2. 运行nettest.py
-```
+
 ---
 
 ## 🚀 快速开始
@@ -405,9 +405,8 @@ LC_ALL=zh_CN.UTF-8
 **症状：** `无法解析电量` 或 `信息字段为空`
 
 **解决：**
-1. 确认 `campus_param`、`building_param` 与开发者工具中完全一致
-2. 检查 `room` 大小写（如 `b111` vs `b111`）
-3. 确认 `type=IEC` 和 `level=3` 未修改
+1. 检查 `room` 大小写（如 `B111` vs `b111`）
+2. 确认 `type=IEC` 和 `level=3` 未修改
 
 ---
 
@@ -423,23 +422,6 @@ LC_ALL=zh_CN.UTF-8
 | 邮箱密码 | 使用授权码 | 非登录密码 |
 | Git 仓库 | 忽略敏感文件 | 见 `.gitignore` |
 
-### .gitignore 示例
-
-```gitignore
-# 敏感配置
-config.yaml
-
-# 状态文件
-power_alert_state.json
-
-# 日志文件
-power_alert.log
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-```
 
 ---
 
@@ -474,32 +456,7 @@ find ~/power_monitor -name "*.log" -size +10M -exec truncate -s 0 {} \;
 source ~/power_monitor/.venv/bin/activate
 pip install --upgrade -r requirements.txt
 ```
-
 ---
-
-## 🛠️ 扩展开发
-
-### 添加多宿舍支持
-
-```bash
-# 1. 复制配置文件
-cp config.yaml config_room106.yaml
-
-# 2. 修改房间信息
-vim config_room106.yaml
-
-# 3. 添加 cron 任务
-crontab -e
-# 添加：
-0 */4 * * * cd ~/power_monitor && python3 main.py >> power_alert_106.log 2>&1
-```
-
-### 添加钉钉机器人告警
-
-在 `send_email()` 函数旁添加 `send_dingtalk()` 函数，调用钉钉 Webhook API。
-
----
-
 ## 📄 许可证
 
 本项目采用 **MIT 许可证**，详见 [LICENSE](LICENSE.md) 文件。
