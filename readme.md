@@ -144,7 +144,7 @@ pip install -r requirements.txt
 
 ```bash
 # 复制配置示例
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 
 # 编辑配置文件
 vim config.yaml
@@ -178,13 +178,26 @@ alert:
 
 ### 4️⃣ 测试运行
 
-```bash
-# 测试邮件发送
-python3 test_email.py
+# 1. 激活虚拟环境
+source .venv/bin/activate
 
-# 测试电量查询
-python3 low_power_alert.py
-```
+# 2. 手动运行测试
+python3 main.py
+
+# 3. 预期成功输出
+# ==================================================
+# 🔋 低电费预警系统启动
+# ==================================================
+# ✓ 配置文件加载成功：/home/powermon/power_monitor/config.yaml
+# 📍 监控位置：青岛校区 凤凰居1号楼 b111
+# ...
+# ✓ 查询成功：当前电量 42.32 度
+# ✓ 电量充足 (42.32 度)
+# ✅ 执行完成
+# ==================================================
+
+# 4. 查看生成的状态文件
+cat power_alert_state.json
 
 ### 5️⃣ 设置定时任务
 
@@ -193,7 +206,7 @@ python3 low_power_alert.py
 crontab -e
 
 # 添加定时任务（每 4 小时执行）
-0 */4 * * * cd /home/youruser/power_monitor && /home/youruser/power_monitor/.venv/bin/python3 low_power_alert.py >> power_alert.log 2>&1
+0 */4 * * * cd /home/youruser/power_monitor && /home/youruser/power_monitor/.venv/bin/python3 main.py >> power_alert.log 2>&1
 
 # 验证任务
 crontab -l
@@ -205,10 +218,10 @@ crontab -l
 
 ```
 power_monitor/
-├── low_power_alert.py      # 主脚本
+├── main.py                 # 主脚本
 ├── config.yaml             # 配置文件（需手动编辑）
-├── config.yaml.example     # 配置示例
-├── test_email.py           # 邮件测试脚本
+├── config.example.yaml     # 配置示例
+├── nettest.py              # Token/接口连通性测试脚本
 ├── requirements.txt        # Python 依赖
 ├── power_alert_state.json  # 状态文件（自动生成）
 ├── power_alert.log         # 日志文件（自动生成）
@@ -318,10 +331,10 @@ paths:
 source .venv/bin/activate
 
 # 手动运行脚本
-python3 low_power_alert.py
+python3 main.py
 
-# 测试邮件发送
-python3 test_email.py
+# 测试 Token/接口连通性
+python3 nettest.py
 
 # 查看日志
 tail -f power_alert.log
@@ -371,7 +384,7 @@ sudo systemctl status cron
 sudo grep CRON /var/log/syslog | tail -20
 
 # 测试 cron 环境
-env -i SHELL=/bin/bash PATH=/usr/bin:/bin python3 low_power_alert.py
+env -i SHELL=/bin/bash PATH=/usr/bin:/bin python3 main.py
 ```
 
 ### 4️⃣ 中文乱码
@@ -474,7 +487,7 @@ vim config_room106.yaml
 # 3. 添加 cron 任务
 crontab -e
 # 添加：
-0 */4 * * * cd ~/power_monitor && python3 low_power_alert.py config_room106.yaml >> power_alert_106.log 2>&1
+0 */4 * * * cd ~/power_monitor && python3 main.py >> power_alert_106.log 2>&1
 ```
 
 ### 添加钉钉机器人告警
