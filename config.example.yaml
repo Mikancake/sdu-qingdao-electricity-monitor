@@ -1,0 +1,34 @@
+location:
+  campus: "青岛校区"  # 校区（显示用)
+  campus_param: "青岛校区&青岛校区" # 校区：（与请求中严格一致）
+  building: "凤凰居1号楼" # 楼宇（显示用）
+  building_param: "1503975832&凤凰居1号楼"  # 楼宇（与请求中严格一致）
+  room: "your_room_number"  # 填写你的宿舍号，例如：b111
+
+auth:
+  token: "bearer your_token_here"  # 从山东大学一卡通系统获取的认证token
+
+email:
+  enabled: true  # 是否启用邮件通知
+  smtp_server: "smtp.163.com"  # SMTP服务器地址
+  smtp_port: 465  # SMTP端口
+  use_ssl: true  # 是否使用SSL
+  sender_email: "your_email@163.com"  # 发送邮件的邮箱地址
+  sender_password: "your_email_password"  # 邮箱密码或授权码
+  receiver_email: "receiver@example.com"  # 接收通知的邮箱地址
+
+alert:
+  low_power_threshold: 5.0  # 电量低于此值时发送警报（单位：度）
+  max_alert_count: 3  # 每天最多发送的警报次数
+  daily_report_hour: 8  # 每日报告的发送时间（24小时制）
+
+api:
+  url: "https://mcard.sdu.edu.cn/charge/feeitem/getThirdData"
+  type: "IEC"
+  level: "3"
+  feeitemid: "410"
+  timeout: 10  # API请求超时时间（秒）
+
+paths:
+  state_file: "power_alert_state.json"  # 状态文件路径
+  log_file: "power_alert.log"  # 日志文件路径
