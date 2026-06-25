@@ -1,0 +1,4 @@
+id,campus,campus_param,building_key,room,receivers,check_interval_minutes,enabled
+fenghuang-1-b111,青岛校区,青岛校区&青岛校区,fenghuang_1,b111,student1@example.com;roommate@example.com,240,true
+fenghuang-2-b112,青岛校区,青岛校区&青岛校区,fenghuang_2,b112,student2@example.com,240,true
+yuehai-b1-a101,青岛校区,青岛校区&青岛校区,yuehai_b1,a101,student3@example.com,240,true

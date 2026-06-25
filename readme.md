@@ -1,485 +1,369 @@
-# 🔋 山东大学宿舍电量监控脚本
+# 山东大学青岛校区宿舍电量监控脚本
 
-<div align="center">
+自动查询山东大学青岛校区宿舍电量，并通过邮件发送低电量提醒、查询异常提醒和电量日报。
 
-**自动监控宿舍电量，低电量及时邮件告警**
+本分支支持多宿舍、多收件人、Token 池轮询、SQLite 状态持久化，以及检测和发信解耦，适合部署在 Ubuntu 服务器上长期运行。
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.md)
-[![Debian](https://img.shields.io/badge/Debian-11/12-red.svg)](https://www.debian.org/)
+## 功能
 
+- 多宿舍监控：一个脚本可以管理多个宿舍。
+- 固定发信邮箱：所有通知统一从同一个 SMTP 邮箱发出。
+- 多收件人：每个宿舍可以配置一个或多个通知邮箱。
+- Token 池：多个 `Synjones-Auth` token 轮询使用，降低单个账号短时间高频请求风险。
+- 检测和通知解耦：`check` 只查询电量并生成通知队列，`notify` 只发送队列里的邮件。
+- SQLite 状态库：保存每个宿舍的电量历史、告警次数、下次检查时间和通知队列。
+- 命令行管理宿舍：通过 `roomctl.py` 增加宿舍、追加收件人、启用或禁用宿舍。
 
-</div>
+## 项目文件
 
-
-## 📖 项目简介
-
-本系统是一个自动化的宿舍电量监控工具，通过定时查询宿舍电控系统接口，实现：
-
-- ⚠️ **低电量预警**：电量低于阈值时自动发送邮件告警
-- 📊 **每日日报**：电量充足时每天 8 点发送电量报告
-- 🔔 **智能限流**：同一状态最多发送 3 次警告，避免过度打扰
-- 📁 **配置分离**：所有参数通过 YAML 配置文件管理，无需修改代码
-
-适用于山东大学青岛校区宿舍电控系统，济南和威海校区可参考修改后使用。
-
-
-
----
-
-## ✨ 功能特性
-
-| 功能 | 说明 |
-|------|------|
-| 🔄 定时查询 | 每 4 小时自动查询电量余额 |
-| ⚠️ 低电量告警 | 电量 < 5 度时发送邮件警告（可配置） |
-| 📧 智能限流 | 同一状态最多发送 3 次，恢复后自动重置 |
-| 📊 每日日报 | 每天 8:00 发送电量报告（电量充足时） |
-| ❌ 异常告警 | 查询失败时发送通知（最多 3 次） |
-| 📁 状态持久化 | JSON 文件记录警告次数，重启不丢失 |
-| 🔐 配置分离 | YAML 配置文件，敏感信息与代码分离 |
-| 📝 日志记录 | 完整执行日志，便于排查问题 |
-
----
-
-## 📋 系统要求
-
-| 项目 | 要求 |
-|------|------|
-| 操作系统 | Debian 11/12（推荐），Ubuntu, CentOS 等 Linux 发行版 |
-| Python 版本 | 3.8 或更高 |
-| 网络连接 | 可访问校园卡综合服务平台 |
-| 邮箱服务 | 支持 SMTP 的邮箱（QQ/163/Gmail 等） |
-| 浏览器 | Chrome/Edge/Firefox（用于获取 Token） |
-
----
-
-## 🛠️ 前期准备：获取 Token 与请求参数
-
-> ⚠️ **重要**：本系统依赖校园卡综合服务平台的认证接口，需先获取有效 Token。
-
-### 步骤 1：登录校园卡综合服务平台
-
-1. 打开浏览器，访问 [山东大学校园卡综合服务平台](https://mcard.sdu.edu.cn/plat-pc/businesslobby)
-2. 使用您的学号/工号登录
-
-### 步骤 2：进入电量查询界面
-
-1. 点击顶部菜单 **服务中心**
-2. 找到并点击 **青岛电控**
-3. 进入电量查询页面
-4. 在页面中填入查询条件（校区、楼栋、房间号）
-
-### 步骤 3：打开开发者工具
-
-1. 按 `F12` 打开浏览器开发者工具
-2. 切换到 **网络（Network）** 标签
-
-
-### 步骤 4：触发请求并抓取数据
-
-1. 点击 **确认查询** 或类似按钮
-2. 在网络标签中点击名为 `getThirdData` 的请求
-
-### 步骤 5：复制关键信息
-
-#### 🔑 复制 Synjones-Auth（认证 Token）
-
-1. 点击该请求 → 查看 **消息头**或 **标头**
-2. 找到 `Synjones-Auth` 字段
-3. 复制完整值（以 `bearer ` 开头）：
-   ```
-   bearer .............
-   ```
-
-#### 📦 复制请求参数（Request Payload）
-
-1. 切换到 **载荷（Payload）** 或 **请求** 标签
-2. 记录以下关键字段的值：
-
-| 参数 | 示例值 | 说明 |
-|------|--------|------|
-| `type` | `IEC` | 固定值 |
-| `level` | `3` | 固定值 |
-| `feeitemid` | `410` | 电费项目 ID |
-| `campus` | `青岛校区&青岛校区` | 校区参数 |
-| `building` | `1503975832&凤凰居1号楼` | 楼栋参数（ID&名称） |
-| `room` | `b000` | 房间号 |
-
-
-### 步骤 6：验证 Token 与信息有效性
-
-1. 将获取到的Token和信息依次填入nettest.py对应位置
-2. 运行nettest.py
-
----
-
-## 🚀 快速开始
-
-### 1️⃣ 克隆/下载项目
-
-```bash
-# 创建项目目录
-mkdir -p ~/power_monitor && cd ~/power_monitor
-
-# 下载项目文件（或手动创建）
-git clone <your-repo-url> .
+```text
+.
+├── main.py                 # 主程序：检测电量、发送通知、测试邮件
+├── nettest.py              # Token 池连通性测试
+├── roomctl.py              # rooms.csv 管理工具
+├── config.example.yaml     # 主配置示例
+├── tokens.example.yaml     # Token 池示例
+├── rooms.example.csv       # 宿舍清单示例
+├── requirements.txt
+└── readme.md
 ```
 
-### 2️⃣ 创建虚拟环境
+运行后会生成：
+
+```text
+config.yaml                 # 本地真实配置，已被 .gitignore 忽略
+tokens.yaml                 # 本地真实 Token 池，已被 .gitignore 忽略
+rooms.csv                   # 本地真实宿舍清单，已被 .gitignore 忽略
+power_monitor.sqlite3       # 本地状态库，已被 .gitignore 忽略
+power_alert.log             # 本地日志，已被 .gitignore 忽略
+```
+
+## 安装
+
+推荐在 Ubuntu 服务器上运行：
 
 ```bash
-# 创建虚拟环境
+git clone https://github.com/Mikancake/sdu-qingdao-electricity-monitor.git
+cd sdu-qingdao-electricity-monitor
+
 python3 -m venv .venv
-
-# 激活虚拟环境
 source .venv/bin/activate
-
-# 安装依赖
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3️⃣ 配置参数
+## 配置
+
+复制示例文件：
 
 ```bash
-# 复制配置示例
 cp config.example.yaml config.yaml
-
-# 编辑配置文件
-vim config.yaml
+cp tokens.example.yaml tokens.yaml
+cp rooms.example.csv rooms.csv
 ```
 
-**关键配置项：**
+编辑 `config.yaml`：
 
 ```yaml
-# 🔐 登录 Token（从校园卡综合服务平台抓取）
-auth:
-  token: "bearer ................"
-
-# 📧 邮箱配置
 email:
-  sender_email: "your@qq.com"
-  sender_password: "your_auth_code"  # 邮箱授权码，非登录密码
-  receiver_email: "alert@example.com"
+  enabled: true
+  smtp_server: "smtp.163.com"
+  smtp_port: 465
+  use_ssl: true
+  sender_email: "your_email@163.com"
+  sender_password: "your_email_auth_code"
+  send_retries: 2
+  retry_delay_seconds: 3
 
-# 📍 宿舍信息（使用前期准备中获取的参数）
-location:
-  campus: "青岛校区"
-  building: "凤凰居1号楼"
-  room: "b111"
-  campus_param: "青岛校区&青岛校区"
-  building_param: "1503975832&凤凰居1号楼"
-
-# ⚙️ 预警阈值
-alert:
-  low_power_threshold: 5.0  # 低于此值触发告警（度）
+tokens_file: "tokens.yaml"
+rooms_file: "rooms.csv"
 ```
 
-### 4️⃣ 测试运行
+`sender_password` 应填写邮箱 SMTP 授权码，不是邮箱登录密码。
 
-# 1. 激活虚拟环境
+常见 SMTP 配置：
+
+```yaml
+# SSL
+smtp_port: 465
+use_ssl: true
+
+# STARTTLS
+smtp_port: 587
+use_ssl: false
 ```
-source .venv/bin/activate
+
+## Token 池
+
+编辑 `tokens.yaml`：
+
+```yaml
+tokens:
+  - id: "account_1"
+    value: "bearer your_token_here"
+    enabled: true
+    min_interval_seconds: 10
+    cooldown_seconds: 300
 ```
-# 2. 手动运行测试
+
+字段说明：
+
+- `id`：Token 名称，只用于日志和状态记录。
+- `value`：浏览器请求头中的完整 `Synjones-Auth` 值。
+- `enabled`：是否启用。
+- `min_interval_seconds`：同一个 Token 两次使用之间的最小间隔。
+- `cooldown_seconds`：Token 发生鉴权或网络异常后的冷却时间。
+
+## 宿舍清单
+
+少量宿舍可以手动编辑 `rooms.csv`，大量宿舍建议使用 `roomctl.py`。
+
+CSV 字段：
+
+```csv
+id,campus,campus_param,building_key,building_param,room,receivers,check_interval_minutes,low_power_threshold,enabled
+fenghuang_1-a219,青岛校区,青岛校区&青岛校区,fenghuang_1,,a219,user@qq.com,240,,true
 ```
-python3 main.py
+
+推荐使用 `building_key`，它会引用 `config.yaml` 中的 `building_params`，避免每个宿舍重复写楼宇接口参数。
+
+当前示例包含这些青岛校区楼宇参数：
+
+```yaml
+building_params:
+  fenghuang_1: "1503975832&凤凰居1号楼"
+  fenghuang_2: "1503975890&凤凰居2号楼"
+  fenghuang_3: "1503975902&凤凰居3号楼"
+  fenghuang_4: "1503975950&凤凰居4号楼"
+  fenghuang_5: "1503975967&凤凰居5号楼"
+  fenghuang_6: "1503975980&凤凰居6号楼"
+  fenghuang_7: "1503975988&凤凰居7号楼"
+  fenghuang_8: "1503975995&凤凰居8号楼"
+  fenghuang_9: "1503976004&凤凰居9号楼"
+  fenghuang_10: "1503976037&凤凰居10号楼"
+  fenghuang_11_13: "1599193777&凤凰居11/13号楼"
+  yuehai_b1: "1661835249&阅海居B1楼"
+  yuehai_b2: "1661835256&阅海居B2楼"
+  yuehai_b5: "1661835273&阅海居B5楼"
+  yuehai_b9: "1693031698&阅海居B9楼"
+  yuehai_b10: "1693031710&阅海居B10楼"
 ```
-# 3. 预期成功输出
-```
-# ==================================================
-# 🔋 低电费预警系统启动
-# ==================================================
-# ✓ 配置文件加载成功：/home/powermon/power_monitor/config.yaml
-# 📍 监控位置：青岛校区 凤凰居1号楼 b111
-# ...
-# ✓ 查询成功：当前电量 42.32 度
-# ✓ 电量充足 (42.32 度)
-# ✅ 执行完成
-# ==================================================
-```
-# 4. 查看生成的状态文件
-```
-cat power_alert_state.json
-```
-### 5️⃣ 设置定时任务
+
+## 使用 roomctl.py 管理宿舍
+
+列出宿舍：
 
 ```bash
-# 编辑 crontab
+python roomctl.py list
+```
+
+新增宿舍：
+
+```bash
+python roomctl.py add \
+  --building-key fenghuang_1 \
+  --room a219 \
+  --receiver user@qq.com
+```
+
+指定 ID：
+
+```bash
+python roomctl.py add \
+  --id fenghuang_1-a219 \
+  --building-key fenghuang_1 \
+  --room a219 \
+  --receiver user@qq.com
+```
+
+追加收件人：
+
+```bash
+python roomctl.py add-receiver \
+  --room-id fenghuang_1-a219 \
+  --receiver roommate@qq.com
+```
+
+启用或禁用宿舍：
+
+```bash
+python roomctl.py enable --room-id fenghuang_1-a219
+python roomctl.py disable --room-id fenghuang_1-a219
+```
+
+覆盖更新已有宿舍：
+
+```bash
+python roomctl.py add \
+  --id fenghuang_1-a219 \
+  --building-key fenghuang_1 \
+  --room a219 \
+  --receiver new@qq.com \
+  --update
+```
+
+## 命令
+
+校验配置：
+
+```bash
+python main.py --validate
+```
+
+测试所有启用 Token：
+
+```bash
+python nettest.py
+```
+
+指定宿舍测试 Token：
+
+```bash
+python nettest.py --room-id fenghuang_1-a219
+```
+
+查询到期宿舍电量，只写入状态和通知队列，不发邮件：
+
+```bash
+python main.py --check
+```
+
+发送通知队列中的邮件：
+
+```bash
+python main.py --notify
+```
+
+检查并发送通知队列：
+
+```bash
+python main.py
+```
+
+强制检查所有宿舍：
+
+```bash
+python main.py --check-all
+```
+
+立即发送一封测试邮件：
+
+```bash
+python main.py --test-email --room-id fenghuang_1-a219
+```
+
+立即给所有启用宿舍发送测试邮件：
+
+```bash
+python main.py --test-email --all
+```
+
+## Ubuntu 定时运行
+
+建议用 cron 分开执行检测和发信：
+
+```bash
 crontab -e
-
-# 添加定时任务（每 4 小时执行）
-0 */4 * * * cd /home/youruser/power_monitor && /home/youruser/power_monitor/.venv/bin/python3 main.py >> power_alert.log 2>&1
-
-# 验证任务
-crontab -l
 ```
 
----
+添加：
 
-## 📁 项目结构
-
-```
-power_monitor/
-├── main.py                 # 主脚本
-├── config.yaml             # 配置文件（需手动编辑）
-├── config.example.yaml     # 配置示例
-├── nettest.py              # Token/接口连通性测试脚本
-├── requirements.txt        # Python 依赖
-├── power_alert_state.json  # 状态文件（自动生成）
-├── power_alert.log         # 日志文件（自动生成）
-└── README.md               # 项目文档
+```cron
+*/5 * * * * cd /home/youruser/sdu-qingdao-electricity-monitor && /home/youruser/sdu-qingdao-electricity-monitor/.venv/bin/python main.py --check >> power_alert.log 2>&1
+*/5 * * * * cd /home/youruser/sdu-qingdao-electricity-monitor && /home/youruser/sdu-qingdao-electricity-monitor/.venv/bin/python main.py --notify >> power_alert.log 2>&1
 ```
 
----
-
-## ⚙️ 配置说明
-
-### config.yaml 完整参数
+cron 每 5 分钟只是唤醒脚本。每个宿舍的实际检测周期由 `config.yaml` 控制：
 
 ```yaml
-# 📍 宿舍信息
-location:
-  campus: "青岛校区"                    # 校区名称（显示用）
-  campus_param: "青岛校区&青岛校区"      # 接口参数（从开发者工具复制）
-  building: "凤凰居1号楼"                # 楼栋名称（显示用）
-  building_param: "1503975832&凤凰居1号楼"  # 接口参数（ID&名称）
-  room: "b111"                          # 房间号
+check:
+  default_interval_minutes: 240
+  batch_size: 20
+  request_interval_seconds: 3
+  jitter_seconds: 60
+```
 
-# 🔐 认证配置
-auth:
-  token: "bearer YOUR_TOKEN_HERE"       # 从平台抓取的 Synjones-Auth
+例如 1000 个宿舍、4 小时检查一次，平均每分钟只需要检查约 4 个宿舍。`batch_size` 和 `request_interval_seconds` 可以避免请求集中爆发。
 
-# 📧 邮箱配置
+## 状态和通知队列
+
+脚本会自动创建 `power_monitor.sqlite3`。其中保存：
+
+- 每个宿舍的下次检查时间
+- 最近电量和历史电量
+- 低电量告警次数
+- 查询异常告警次数
+- 每日报告状态
+- 待发送通知队列
+
+这意味着检测和发信可以独立运行。即使一次邮件发送失败，也不会影响后续电量检测。
+
+## 安全建议
+
+真实配置文件已在 `.gitignore` 中忽略，不应提交到 Git：
+
+```text
+config.yaml
+tokens.yaml
+rooms.csv
+power_monitor.sqlite3
+power_alert.log
+.env
+*.bak
+```
+
+服务器上建议设置权限：
+
+```bash
+chmod 700 .
+chmod 600 config.yaml tokens.yaml rooms.csv
+```
+
+不要使用 `git add -f config.yaml tokens.yaml rooms.csv` 强制添加真实配置。
+
+## 常见问题
+
+### 邮件发送出现 `[SSL] record layer failure`
+
+通常是 SMTP 连接的 TLS 握手失败。若部分邮件成功、部分失败，多半是网络或邮箱服务器临时断开连接。脚本默认会自动重试：
+
+```yaml
 email:
-  enabled: true                         # 是否启用邮件
-  smtp_server: "smtp.qq.com"            # SMTP 服务器
-  smtp_port: 465                        # SMTP 端口
-  use_ssl: true                         # 是否使用 SSL
-  sender_email: "your@qq.com"           # 发送邮箱
-  sender_password: "your_auth_code"     # 邮箱授权码
-  receiver_email: "alert@example.com"   # 接收邮箱
-
-# ⚙️ 预警配置
-alert:
-  low_power_threshold: 5.0              # 低电量阈值（度）
-  max_alert_count: 3                    # 最大警告次数
-  daily_report_hour: 8                  # 日报发送时间（小时）
-
-# 🔌 接口配置（一般无需修改）
-api:
-  url: "https://mcard.sdu.edu.cn/charge/feeitem/getThirdData"
-  type: "IEC"
-  level: "3"
-  feeitemid: "410"
-  timeout: 10
-
-# 📁 文件路径
-paths:
-  state_file: "power_alert_state.json"
-  log_file: "power_alert.log"
+  send_retries: 2
+  retry_delay_seconds: 3
 ```
 
----
+如果全部邮件都失败，请检查端口和加密方式是否匹配：
 
-## 📊 邮件示例
-
-### ⚠️ 低电量警告
-
-```
-主题：⚠️ 低电量预警 [1/3] - 青岛校区 凤凰居1号楼 b111
-
-【低电费预警通知】
-📍 位置：青岛校区 凤凰居1号楼 b111
-🔋 当前剩余电量：3.50 度
-🚨 预警阈值：5.0 度
-⏰ 检测时间：2026-03-07 18:30:00
-📧 警告次数：1/3（电量恢复前最多发送 3 次）
-
-⚠️ 电量已低于安全阈值，请及时充值！
+```yaml
+smtp_port: 465
+use_ssl: true
 ```
 
-### 📊 电量日报
+或：
 
-```
-主题：📊 电量日报 - 青岛校区 凤凰居1号楼 b111
-
-【电量日报】
-📍 位置：青岛校区 凤凰居1号楼 b111
-🔋 当前剩余电量：42.32 度
-📅 报告时间：2026-03-07 08:00:00
-📈 预计可用：14.1 天（按日均 3 度估算）
-
-✅ 电量充足，无需充值。
+```yaml
+smtp_port: 587
+use_ssl: false
 ```
 
-### ❌ 查询失败
+### Token 失效
 
-```
-主题：❌ 电量查询失败 [1/3] - 青岛校区 凤凰居1号楼 b111
-
-【查询异常通知】
-📍 位置：青岛校区 凤凰居1号楼 b111
-❌ 错误信息：HTTP 401: Unauthorized
-⏰ 检测时间：2026-03-07 18:30:00
-📧 警告次数：1/3（恢复正常前最多发送 3 次）
-```
-
----
-
-## 🔧 常用命令
+运行：
 
 ```bash
-# 激活虚拟环境
-source .venv/bin/activate
-
-# 手动运行脚本
-python3 main.py
-
-# 测试 Token/接口连通性
-python3 nettest.py
-
-# 查看日志
-tail -f power_alert.log
-
-# 查看状态
-cat power_alert_state.json | python3 -m json.tool
-
-# 重置状态（测试用）
-echo '{}' > power_alert_state.json
-
-# 检查 cron 服务
-sudo systemctl status cron
+python nettest.py
 ```
 
----
+如果返回 `401` 或 `403`，需要重新从校园卡系统抓取 `Synjones-Auth` 并更新 `tokens.yaml`。
 
-## ❓ 常见问题
+### 宿舍参数错误
 
-### 1️⃣ Token 过期（401 错误）
+如果返回“信息字段为空”或“无法解析电量”，优先检查：
 
-**症状：** `HTTP 401: Unauthorized`
+- `building_key` 是否存在于 `building_params`
+- `room` 大小写是否和页面请求一致
+- `campus_param` 是否为 `青岛校区&青岛校区`
 
-**解决：**
-1. 重新登录 [校园卡综合服务平台](https://mcard.sdu.edu.cn/plat-pc/businesslobby)
-2. 按「前期准备」步骤重新抓取 `Synjones-Auth`
-3. 更新 `config.yaml` 中的 `auth.token`
+## 许可证
 
-### 2️⃣ 邮件发送失败
-
-**症状：** `SMTPAuthenticationError`
-
-**解决：**
-1. QQ 邮箱：设置 → 账户 → 开启 SMTP → 生成授权码
-2. 163 邮箱：设置 → POP3/SMTP/IMAP → 开启服务 → 获取授权码
-3. 使用授权码，**非登录密码**
-
-### 3️⃣ Cron 不执行
-
-**症状：** 定时任务无日志输出
-
-**解决：**
-```bash
-# 检查 cron 服务
-sudo systemctl status cron
-
-# 查看 cron 日志
-sudo grep CRON /var/log/syslog | tail -20
-
-# 测试 cron 环境
-env -i SHELL=/bin/bash PATH=/usr/bin:/bin python3 main.py
-```
-
-### 4️⃣ 中文乱码
-
-**解决：**
-```bash
-# 在 crontab 顶部添加
-LANG=zh_CN.UTF-8
-LC_ALL=zh_CN.UTF-8
-```
-
-### 5️⃣ 请求参数错误
-
-**症状：** `无法解析电量` 或 `信息字段为空`
-
-**解决：**
-1. 检查 `room` 大小写（如 `B111` vs `b111`）
-2. 确认 `type=IEC` 和 `level=3` 未修改
-
----
-
-## 🔐 安全建议
-
-| 项目 | 建议 | 命令 |
-|------|------|------|
-| 配置文件 | 权限 600 | `chmod 600 config.yaml` |
-| 状态文件 | 权限 600 | `chmod 600 power_alert_state.json` |
-| 日志文件 | 权限 640 | `chmod 640 power_alert.log` |
-| 项目目录 | 权限 700 | `chmod 700 ~/power_monitor` |
-| Token | 定期更换 | 建议每周更新 |
-| 邮箱密码 | 使用授权码 | 非登录密码 |
-| Git 仓库 | 忽略敏感文件 | 见 `.gitignore` |
-
-
----
-
-## 📈 监控与维护
-
-### 日常检查
-
-```bash
-# 1. 查看最近日志
-tail -n 50 ~/power_monitor/power_alert.log
-
-# 2. 搜索错误
-grep -i "error\|fail\|401" ~/power_monitor/power_alert.log
-
-# 3. 检查 cron 任务
-crontab -l
-
-# 4. 查看状态文件
-cat ~/power_monitor/power_alert_state.json
-```
-
-### 定期维护
-
-```bash
-# 每周：更新 Token
-vim ~/power_monitor/config.yaml
-
-# 每月：清理大日志
-find ~/power_monitor -name "*.log" -size +10M -exec truncate -s 0 {} \;
-
-# 每季度：更新依赖
-source ~/power_monitor/.venv/bin/activate
-pip install --upgrade -r requirements.txt
-```
----
-## 📄 许可证
-
-本项目采用 **MIT 许可证**，详见 [LICENSE](LICENSE.md) 文件。
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-
----
-
-<div align="center">
-
-**⚡ 如果本项目对您有帮助，请给个 Star ⭐**
-
-Made with ❤️ by OrangeHome&qwen | 2026
-
-</div>
+本项目采用 MIT 许可证，详见 `LICENSE.md`。
