@@ -45,6 +45,9 @@ type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "settings" |
 
 function describeError(error: unknown) {
   if (error instanceof ApiError) {
+    if (error.status >= 500) {
+      return "服务器处理失败，请稍后再试。";
+    }
     if (typeof error.detail === "string") {
       return error.detail;
     }
@@ -557,7 +560,17 @@ function UsersPanel({
   );
 }
 
-function AdminRoomsPanel({ rooms, loading }: { rooms: AdminRoom[]; loading: boolean }) {
+function AdminRoomsPanel({
+  rooms,
+  loading,
+  deletingBindingId,
+  onDeleteBinding
+}: {
+  rooms: AdminRoom[];
+  loading: boolean;
+  deletingBindingId?: number | null;
+  onDeleteBinding: (userId: number, bindingId: number) => void;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -584,6 +597,7 @@ function AdminRoomsPanel({ rooms, loading }: { rooms: AdminRoom[]; loading: bool
                   <th className="px-4 py-3 font-medium">绑定账号邮箱</th>
                   <th className="px-4 py-3 font-medium">提醒邮箱</th>
                   <th className="px-4 py-3 font-medium">最近绑定</th>
+                  <th className="px-4 py-3 text-right font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -629,6 +643,22 @@ function AdminRoomsPanel({ rooms, loading }: { rooms: AdminRoom[]; loading: bool
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDateTime(newestBinding)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col items-end gap-1">
+                          {item.bindings.map((binding) => (
+                            <Button
+                              key={binding.binding_id}
+                              size="sm"
+                              variant="ghost"
+                              disabled={deletingBindingId === binding.binding_id}
+                              onClick={() => onDeleteBinding(binding.user_id, binding.binding_id)}
+                            >
+                              {deletingBindingId === binding.binding_id ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                              删除绑定
+                            </Button>
+                          ))}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1494,7 +1524,16 @@ export function AdminApp() {
           ) : null}
 
           {activeView === "rooms" ? (
-            <AdminRoomsPanel rooms={adminRoomsQuery.data ?? []} loading={adminRoomsQuery.isLoading} />
+            <AdminRoomsPanel
+              rooms={adminRoomsQuery.data ?? []}
+              loading={adminRoomsQuery.isLoading}
+              deletingBindingId={deleteManagedUserRoomMutation.variables?.bindingId ?? null}
+              onDeleteBinding={(userId, bindingId) => {
+                if (window.confirm("确定删除这个用户的宿舍绑定吗？")) {
+                  deleteManagedUserRoomMutation.mutate({ userId, bindingId });
+                }
+              }}
+            />
           ) : null}
 
           {activeView === "tokens" ? (

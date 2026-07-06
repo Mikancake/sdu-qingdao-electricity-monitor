@@ -30,6 +30,9 @@ function formatRetryAfter(seconds: number) {
 }
 function describeError(error: unknown) {
   if (error instanceof ApiError) {
+    if (error.status >= 500) {
+      return "服务器处理失败，请稍后再试；如果刚刚手动刷新过，可能是冷却时间还没有同步完成。";
+    }
     if (typeof error.detail === "string") {
       return error.detail;
     }
@@ -50,9 +53,6 @@ function describeError(error: unknown) {
     ) {
       const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 1800;
       return `邮件发送冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
-    }
-    if (error.status >= 500) {
-      return "服务器处理失败，请稍后再试；如果刚刚手动刷新过，可能是冷却时间还没有同步完成。";
     }
     return JSON.stringify(error.detail);
   }
@@ -211,7 +211,7 @@ export default function App() {
       api.updateBinding(id, payload),
     onMutate: ({ id }) => setUpdatingId(id),
     onSuccess: () => {
-      setNotice("提醒设置已保存。");
+      setNotice("宿舍设置已保存。");
       void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
       void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
     },
@@ -347,9 +347,11 @@ export default function App() {
           bindings={bindings}
           loading={bindingsQuery.isLoading || buildingsQuery.isLoading}
           saving={bindMutation.isPending}
+          updatingId={updatingId}
           checkingId={checkingId}
           manualCheckAvailableAtByBinding={manualCheckAvailableAtByBinding}
           onBindRoom={(payload) => bindMutation.mutate(payload)}
+          onUpdateRoom={(bindingId, payload) => updateMutation.mutate({ id: bindingId, payload })}
           onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
           onToggleRoom={toggleBinding}
           onDeleteRoom={(bindingId) => deleteMutation.mutate(bindingId)}

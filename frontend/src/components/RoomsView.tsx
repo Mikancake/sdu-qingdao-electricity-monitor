@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Building2, Loader2, Plus, RefreshCcw, Trash2 } from "lucide-react";
+import { Building2, Edit3, Loader2, Plus, RefreshCcw, Save, Trash2, X } from "lucide-react";
 
 import type { Building, UserRoomBinding } from "../lib/types";
 import { formatDateTime, formatKwh } from "../lib/utils";
@@ -9,23 +9,33 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input, Label, Select } from "./ui/input";
 
+type RoomBindingPayload = {
+  building_key?: string | null;
+  building_name?: string | null;
+  building_param?: string | null;
+  campus?: string | null;
+  campus_param?: string | null;
+  room_number: string;
+  alert_days: number;
+  low_power_threshold?: string | null;
+};
+
 interface RoomsViewProps {
   buildings: Building[];
   bindings: UserRoomBinding[];
   loading: boolean;
   saving: boolean;
+  updatingId?: number | null;
   checkingId?: number | null;
   manualCheckAvailableAtByBinding?: Record<number, string | null | undefined>;
-  onBindRoom: (payload: {
-    building_key: string;
-    room_number: string;
-    alert_days: number;
-    low_power_threshold?: string | null;
-  }) => void;
+  onBindRoom: (payload: RoomBindingPayload) => void;
+  onUpdateRoom: (bindingId: number, payload: RoomBindingPayload) => void;
   onCheckRoom: (bindingId: number) => void;
   onToggleRoom: (binding: UserRoomBinding) => void;
   onDeleteRoom: (bindingId: number) => void;
 }
+
+const DEFAULT_BUILDING_KEY = "fenghuang_11_13";
 
 function cooldownSecondsUntil(value?: string | null, now = Date.now()) {
   if (!value) {
@@ -34,37 +44,92 @@ function cooldownSecondsUntil(value?: string | null, now = Date.now()) {
   return Math.max(0, Math.ceil((new Date(value).getTime() - now) / 1000));
 }
 
+function resolveBindingBuildingKey(buildings: Building[], binding: UserRoomBinding) {
+  return binding.room.building_key ?? buildings.find((building) => building.param === binding.room.building_param)?.key ?? "";
+}
+
 export function RoomsView({
   buildings,
   bindings,
   loading,
   saving,
+  updatingId,
   checkingId,
   manualCheckAvailableAtByBinding = {},
   onBindRoom,
+  onUpdateRoom,
   onCheckRoom,
   onToggleRoom,
   onDeleteRoom
 }: RoomsViewProps) {
   const [now, setNow] = useState(() => Date.now());
-  const [buildingKey, setBuildingKey] = useState("fenghuang_11_13");
+  const [editingBindingId, setEditingBindingId] = useState<number | null>(null);
+  const [buildingKey, setBuildingKey] = useState(DEFAULT_BUILDING_KEY);
   const [roomNumber, setRoomNumber] = useState("");
   const [alertDays, setAlertDays] = useState(3);
   const [threshold, setThreshold] = useState("");
+
+  const editingBinding = bindings.find((binding) => binding.id === editingBindingId) ?? null;
+  const isEditing = editingBinding !== null;
+  const formSaving = saving || (editingBindingId !== null && updatingId === editingBindingId);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    onBindRoom({
-      building_key: buildingKey,
+  useEffect(() => {
+    if (editingBindingId !== null && !bindings.some((binding) => binding.id === editingBindingId)) {
+      resetForm();
+    }
+  }, [bindings, editingBindingId]);
+
+  function resetForm() {
+    setEditingBindingId(null);
+    setBuildingKey(DEFAULT_BUILDING_KEY);
+    setRoomNumber("");
+    setAlertDays(3);
+    setThreshold("");
+  }
+
+  function beginEdit(binding: UserRoomBinding) {
+    setEditingBindingId(binding.id);
+    setBuildingKey(resolveBindingBuildingKey(buildings, binding));
+    setRoomNumber(binding.room.room_number);
+    setAlertDays(binding.alert_days);
+    setThreshold(binding.low_power_threshold ? String(binding.low_power_threshold) : "");
+  }
+
+  function buildPayload(): RoomBindingPayload {
+    const payload: RoomBindingPayload = {
       room_number: roomNumber.trim(),
       alert_days: alertDays,
       low_power_threshold: threshold.trim() ? threshold.trim() : null
-    });
+    };
+
+    if (buildingKey) {
+      payload.building_key = buildingKey;
+      return payload;
+    }
+
+    if (editingBinding) {
+      payload.campus = editingBinding.room.campus;
+      payload.campus_param = editingBinding.room.campus_param;
+      payload.building_name = editingBinding.room.building_name;
+      payload.building_param = editingBinding.room.building_param;
+    }
+    return payload;
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const payload = buildPayload();
+    if (isEditing) {
+      onUpdateRoom(editingBinding.id, payload);
+      resetForm();
+      return;
+    }
+    onBindRoom(payload);
     setRoomNumber("");
   }
 
@@ -72,14 +137,17 @@ export function RoomsView({
     <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
       <Card>
         <CardHeader>
-          <CardTitle>绑定宿舍</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">选择宿舍楼并填写宿舍号，平台会自动匹配学校查询参数。</p>
+          <CardTitle>{isEditing ? "编辑宿舍" : "绑定宿舍"}</CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isEditing ? "修改宿舍楼、宿舍号和提醒阈值。" : "选择宿舍楼并填写宿舍号，平台会自动匹配学校查询参数。"}
+          </p>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={submit}>
             <div>
               <Label htmlFor="building">宿舍楼</Label>
               <Select id="building" value={buildingKey} onChange={(event) => setBuildingKey(event.target.value)}>
+                {isEditing && !buildingKey ? <option value="">{editingBinding.room.building_name}</option> : null}
                 {buildings.map((building) => (
                   <option key={building.key} value={building.key}>
                     {building.name}
@@ -122,10 +190,16 @@ export function RoomsView({
                 />
               </div>
             </div>
-            <Button className="w-full" disabled={saving || !roomNumber.trim()}>
-              {saving ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
-              添加宿舍
+            <Button className="w-full" disabled={formSaving || !roomNumber.trim()}>
+              {formSaving ? <Loader2 className="animate-spin" size={16} /> : isEditing ? <Save size={16} /> : <Plus size={16} />}
+              {isEditing ? "保存修改" : "添加宿舍"}
             </Button>
+            {isEditing ? (
+              <Button className="w-full" type="button" variant="secondary" onClick={resetForm}>
+                <X size={16} />
+                取消编辑
+              </Button>
+            ) : null}
           </form>
         </CardContent>
       </Card>
@@ -143,7 +217,7 @@ export function RoomsView({
           ) : bindings.length === 0 ? (
             <EmptyState
               title="暂无绑定"
-              description="添加宿舍后，可以在这里启用提醒、手动刷新电量或删除绑定。"
+              description="添加宿舍后，可以在这里启用提醒、手动刷新电量、编辑或删除绑定。"
               icon={<Building2 size={28} />}
             />
           ) : (
@@ -162,41 +236,46 @@ export function RoomsView({
                   {bindings.map((binding) => {
                     const cooldownSeconds = cooldownSecondsUntil(manualCheckAvailableAtByBinding[binding.id], now);
                     const checking = checkingId === binding.id;
+                    const updating = updatingId === binding.id;
 
                     return (
-                    <tr key={binding.id} className="border-t border-border">
-                      <td className="px-4 py-3">
-                        <div className="font-medium">
-                          {binding.room.building_name} {binding.room.room_number}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {binding.low_power_threshold ? formatKwh(binding.low_power_threshold) : `${binding.alert_days} 天余量`}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge tone={binding.enabled ? "success" : "muted"}>{binding.enabled ? "启用" : "停用"}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{formatDateTime(binding.created_at)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="icon"
-                            variant="secondary"
-                            title={cooldownSeconds > 0 ? `${cooldownSeconds}s 后可刷新` : "刷新电量"}
-                            disabled={checking || cooldownSeconds > 0}
-                            onClick={() => onCheckRoom(binding.id)}
-                          >
-                            {checking ? <Loader2 className="animate-spin" size={15} /> : <RefreshCcw size={15} />}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onToggleRoom(binding)}>
-                            {binding.enabled ? "停用" : "启用"}
-                          </Button>
-                          <Button size="icon" variant="ghost" title="删除绑定" onClick={() => onDeleteRoom(binding.id)}>
-                            <Trash2 size={15} />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
+                      <tr key={binding.id} className="border-t border-border">
+                        <td className="px-4 py-3">
+                          <div className="font-medium">
+                            {binding.room.building_name} {binding.room.room_number}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {binding.low_power_threshold ? formatKwh(binding.low_power_threshold) : `${binding.alert_days} 天余量`}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge tone={binding.enabled ? "success" : "muted"}>{binding.enabled ? "启用" : "停用"}</Badge>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatDateTime(binding.created_at)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            <Button size="icon" variant="ghost" title="编辑宿舍" onClick={() => beginEdit(binding)}>
+                              <Edit3 size={15} />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="secondary"
+                              title={cooldownSeconds > 0 ? `${cooldownSeconds}s 后可刷新` : "刷新电量"}
+                              disabled={checking || cooldownSeconds > 0}
+                              onClick={() => onCheckRoom(binding.id)}
+                            >
+                              {checking ? <Loader2 className="animate-spin" size={15} /> : <RefreshCcw size={15} />}
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={updating} onClick={() => onToggleRoom(binding)}>
+                              {updating ? <Loader2 className="animate-spin" size={14} /> : null}
+                              {binding.enabled ? "停用" : "启用"}
+                            </Button>
+                            <Button size="icon" variant="ghost" title="删除绑定" onClick={() => onDeleteRoom(binding.id)}>
+                              <Trash2 size={15} />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>

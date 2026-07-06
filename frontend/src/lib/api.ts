@@ -57,9 +57,11 @@ export interface ApiClient {
   ) => Promise<Reading[]>;
   listCheckAttempts: () => Promise<CheckAttempt[]>;
   bindRoom: (payload: {
-    building_key?: string;
-    building_name?: string;
-    building_param?: string;
+    campus?: string | null;
+    campus_param?: string | null;
+    building_key?: string | null;
+    building_name?: string | null;
+    building_param?: string | null;
     room_number: string;
     alert_days: number;
     low_power_threshold?: string | null;
@@ -68,6 +70,12 @@ export interface ApiClient {
   updateBinding: (
     bindingId: number,
     payload: {
+      campus?: string | null;
+      campus_param?: string | null;
+      building_key?: string | null;
+      building_name?: string | null;
+      building_param?: string | null;
+      room_number?: string;
       alert_days?: number;
       low_power_threshold?: string | null;
       manual_check_cooldown_seconds?: number | null;
@@ -96,6 +104,12 @@ export interface ApiClient {
     userId: number,
     bindingId: number,
     payload: {
+      campus?: string | null;
+      campus_param?: string | null;
+      building_key?: string | null;
+      building_name?: string | null;
+      building_param?: string | null;
+      room_number?: string;
       alert_days?: number;
       low_power_threshold?: string | null;
       manual_check_cooldown_seconds?: number | null;

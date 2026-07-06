@@ -87,7 +87,6 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                 </div>
                 <div>
                   <div className="text-sm font-semibold">Electricity Monitor</div>
-                  <div className="text-xs text-muted-foreground">Community Edition</div>
                 </div>
               </div>
 

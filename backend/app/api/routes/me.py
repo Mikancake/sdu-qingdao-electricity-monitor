@@ -45,6 +45,7 @@ from app.services.users import delete_user_account
 
 router = APIRouter()
 TEST_EMAIL_COOLDOWN = timedelta(minutes=30)
+ROOM_LOCATION_FIELDS = {"campus", "campus_param", "building_key", "building_name", "building_param", "room_number"}
 
 
 def now_like(value: datetime | None = None) -> datetime:
@@ -73,9 +74,9 @@ def ensure_user_config_not_below_global(db: Session, *, notify_cooldown_hours: i
         )
 
 
-def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
+def find_or_create_room_from_data(db: Session, data: dict) -> Room:
     try:
-        room_data = normalize_room_data(payload.model_dump())
+        room_data = normalize_room_data(data)
     except RoomInputError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -91,6 +92,10 @@ def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
     db.add(room)
     db.flush()
     return room
+
+
+def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
+    return find_or_create_room_from_data(db, payload.model_dump())
 
 
 def get_my_binding(db: Session, user: User, binding_id: int) -> UserRoom:
@@ -406,6 +411,41 @@ def update_my_room_binding(
     db: Session = Depends(db_session),
 ) -> UserRoom:
     binding = get_my_binding(db, user, binding_id)
+    if ROOM_LOCATION_FIELDS & payload.model_fields_set:
+        building_key_changed = "building_key" in payload.model_fields_set
+        room_payload = {
+            "campus": payload.campus if "campus" in payload.model_fields_set and payload.campus is not None else binding.room.campus,
+            "campus_param": (
+                payload.campus_param
+                if "campus_param" in payload.model_fields_set and payload.campus_param is not None
+                else binding.room.campus_param
+            ),
+            "room_number": (
+                payload.room_number
+                if "room_number" in payload.model_fields_set and payload.room_number is not None
+                else binding.room.room_number
+            ),
+        }
+        if building_key_changed:
+            room_payload["building_key"] = payload.building_key
+            if "building_name" in payload.model_fields_set:
+                room_payload["building_name"] = payload.building_name
+            if "building_param" in payload.model_fields_set:
+                room_payload["building_param"] = payload.building_param
+        else:
+            room_payload["building_key"] = binding.room.building_key
+            room_payload["building_name"] = (
+                payload.building_name
+                if "building_name" in payload.model_fields_set and payload.building_name is not None
+                else binding.room.building_name
+            )
+            room_payload["building_param"] = (
+                payload.building_param
+                if "building_param" in payload.model_fields_set and payload.building_param is not None
+                else binding.room.building_param
+            )
+        room = find_or_create_room_from_data(db, room_payload)
+        binding.room_id = room.id
     if payload.alert_days is not None:
         binding.alert_days = payload.alert_days
     if "low_power_threshold" in payload.model_fields_set:
@@ -426,9 +466,16 @@ def update_my_room_binding(
         binding.notify_cooldown_hours = payload.notify_cooldown_hours
     if payload.enabled is not None:
         binding.enabled = payload.enabled
-    db.commit()
-    db.refresh(binding)
-    return binding
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="room already bound") from exc
+    stmt = select(UserRoom).options(selectinload(UserRoom.room)).where(UserRoom.id == binding.id)
+    updated = db.scalar(stmt)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="room binding not found")
+    return updated
 
 
 @router.delete("/rooms/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)

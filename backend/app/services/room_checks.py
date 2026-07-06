@@ -15,6 +15,11 @@ from app.services.runtime_settings import get_runtime_config
 from app.services.token_pool import select_available_token
 
 
+def now_like(value: datetime | None = None) -> datetime:
+    tzinfo = value.tzinfo if value is not None else None
+    return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
+
+
 @dataclass(frozen=True)
 class RoomCheckOutcome:
     room_id: int
@@ -103,13 +108,17 @@ def latest_read_at(db: Session, room_id: int) -> datetime | None:
 
 def list_due_rooms(db: Session, *, limit: int | None = None) -> list[Room]:
     runtime = get_runtime_config(db)
-    cutoff = datetime.now() - timedelta(seconds=runtime.check_interval_seconds)
+    interval = timedelta(seconds=runtime.check_interval_seconds)
     rooms = list(db.scalars(select(Room).order_by(Room.id)))
     due: list[Room] = []
     for room in rooms:
         last_read_at = latest_read_at(db, room.id)
-        if last_read_at is None or last_read_at <= cutoff:
+        if last_read_at is None:
             due.append(room)
+        else:
+            cutoff = now_like(last_read_at) - interval
+            if last_read_at <= cutoff:
+                due.append(room)
         if limit is not None and len(due) >= limit:
             break
     return due

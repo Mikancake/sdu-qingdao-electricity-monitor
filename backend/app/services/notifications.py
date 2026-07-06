@@ -14,6 +14,11 @@ from app.services.runtime_settings import get_runtime_config
 from app.services.usage import get_room_usage_stats
 
 
+def now_like(value: datetime | None = None) -> datetime:
+    tzinfo = value.tzinfo if value is not None else None
+    return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
+
+
 @dataclass(frozen=True)
 class NotificationBatchResult:
     scanned: int
@@ -44,7 +49,7 @@ def _recent_notification_exists(db, binding: UserRoom) -> bool:
     cooldown_hours = _effective_notify_cooldown_hours(db, binding)
     if cooldown_hours <= 0:
         return False
-    cutoff = datetime.now() - timedelta(hours=cooldown_hours)
+    cutoff = now_like() - timedelta(hours=cooldown_hours)
     existing = db.scalar(
         select(Notification.id)
         .where(
@@ -147,11 +152,12 @@ def _daily_report_due(user: User, now: datetime) -> bool:
     interval_days = max(1, user.daily_report_interval_days or 1)
     if user.daily_report_last_sent_at is None:
         return True
-    return user.daily_report_last_sent_at + timedelta(days=interval_days) <= now
+    comparable_now = now_like(user.daily_report_last_sent_at)
+    return user.daily_report_last_sent_at + timedelta(days=interval_days) <= comparable_now
 
 
 def run_daily_reports() -> DailyReportBatchResult:
-    now = datetime.now()
+    now = now_like()
     scanned = sent = skipped = failed = 0
     with SessionLocal() as db:
         users = list(db.scalars(select(User).where(User.is_verified.is_(True)).order_by(User.id)))

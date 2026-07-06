@@ -4,6 +4,7 @@ config.local.yaml
 config.yaml.*.bak
 *.bak
 *.tmp
+*.tar
 *.pid
 .env
 .env.*
