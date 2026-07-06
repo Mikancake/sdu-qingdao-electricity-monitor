@@ -93,7 +93,7 @@ export function RoomsView({
                 id="room"
                 value={roomNumber}
                 onChange={(event) => setRoomNumber(event.target.value)}
-                placeholder="例如 213 / a219"
+                placeholder="例如 X204 / R305"
                 required
               />
             </div>

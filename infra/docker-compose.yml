@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: sdu_power
       POSTGRES_USER: sdu_power
-      POSTGRES_PASSWORD: sdu_power_dev
+      POSTGRES_PASSWORD: change_this_dev_password
     ports:
       - "5432:5432"
     volumes:
