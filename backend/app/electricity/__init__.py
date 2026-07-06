@@ -1,0 +1,1 @@
+"""Campus electricity API adapter."""
