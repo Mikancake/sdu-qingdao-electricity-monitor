@@ -3,6 +3,7 @@ import type {
   AdminAuditLog,
   AdminLoginResponse,
   AdminManagedUser,
+  AdminRoom,
   AdminManagedUserDetail,
   AdminStatus,
   AdminUser,
@@ -103,6 +104,7 @@ export interface ApiClient {
     }
   ) => Promise<UserRoomBinding>;
   deleteAdminUserRoom: (userId: number, bindingId: number) => Promise<void>;
+  listAdminRooms: () => Promise<AdminRoom[]>;
   listAdminTokens: () => Promise<AdminAuthToken[]>;
   createAdminToken: (payload: {
     name: string;
@@ -339,6 +341,7 @@ export function createApiClient(token?: string | null): ApiClient {
         },
         token
       ),
+    listAdminRooms: () => request<AdminRoom[]>("/api/admin/rooms", {}, token),
     listAdminTokens: () => request<AdminAuthToken[]>("/api/admin/tokens", {}, token),
     createAdminToken: (payload) =>
       request<AdminAuthToken>(

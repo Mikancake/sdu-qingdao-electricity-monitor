@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = Field(default="SDU Electricity Platform", validation_alias="APP_NAME")
+    app_name: str = Field(default="Electricity Monitor", validation_alias="APP_NAME")
     debug: bool = Field(default=True, validation_alias="APP_DEBUG")
     secret_key: str = Field(default="dev-secret-change-me-before-deploy", validation_alias="SECRET_KEY")
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES")

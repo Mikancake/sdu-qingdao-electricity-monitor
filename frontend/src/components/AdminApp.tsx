@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryCharging,
+  Building2,
   Bell,
   Database,
   Edit3,
@@ -22,7 +23,15 @@ import {
 } from "lucide-react";
 
 import { ApiError, createApiClient } from "../lib/api";
-import type { AdminAuditLog, AdminAuthToken, AdminManagedUser, AdminManagedUserDetail, RuntimeSettings, SmtpSettings } from "../lib/types";
+import type {
+  AdminAuditLog,
+  AdminAuthToken,
+  AdminManagedUser,
+  AdminManagedUserDetail,
+  AdminRoom,
+  RuntimeSettings,
+  SmtpSettings
+} from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -32,7 +41,7 @@ import { Input, Label } from "./ui/input";
 const ADMIN_TOKEN_KEY = "sdu-electricity-admin-token";
 const ADMIN_THEME_KEY = "sdu-electricity-theme";
 
-type AdminView = "status" | "users" | "tokens" | "smtp" | "settings" | "account" | "audit";
+type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "settings" | "account" | "audit";
 
 function describeError(error: unknown) {
   if (error instanceof ApiError) {
@@ -545,6 +554,90 @@ function UsersPanel({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function AdminRoomsPanel({ rooms, loading }: { rooms: AdminRoom[]; loading: boolean }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>宿舍列表</CardTitle>
+        <p className="mt-1 text-xs text-muted-foreground">按当前绑定关系统计宿舍，删除绑定后这里会同步减少。</p>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 animate-spin" size={18} />
+            正在读取宿舍
+          </div>
+        ) : rooms.length === 0 ? (
+          <div className="flex h-44 items-center justify-center rounded-lg border border-border text-sm text-muted-foreground">
+            暂无宿舍绑定
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <table className="w-full border-collapse text-sm">
+              <thead className="bg-muted text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3 font-medium">宿舍</th>
+                  <th className="px-4 py-3 font-medium">绑定人数</th>
+                  <th className="px-4 py-3 font-medium">绑定账号邮箱</th>
+                  <th className="px-4 py-3 font-medium">提醒邮箱</th>
+                  <th className="px-4 py-3 font-medium">最近绑定</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rooms.map((item) => {
+                  const newestBinding = item.bindings.reduce<string | null>((latest, binding) => {
+                    if (!latest || new Date(binding.created_at).getTime() > new Date(latest).getTime()) {
+                      return binding.created_at;
+                    }
+                    return latest;
+                  }, null);
+
+                  return (
+                    <tr key={item.room.id} className="border-t border-border align-top">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">
+                          {item.room.building_name} {item.room.room_number}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">{item.room.campus}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge tone="success">{item.binding_count}</Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-1">
+                          {item.bindings.map((binding) => (
+                            <div key={binding.binding_id} className="break-all text-muted-foreground">
+                              {binding.email}
+                              {!binding.enabled ? <span className="ml-2 text-xs text-warning">停用</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-1">
+                          {item.bindings.map((binding) => (
+                            <div key={binding.binding_id} className="break-all text-muted-foreground">
+                              {binding.notification_email || binding.email}
+                              <span className={binding.notification_email_verified ? "ml-2 text-xs text-success" : "ml-2 text-xs text-muted-foreground"}>
+                                {binding.notification_email_verified ? "已验证" : "账号邮箱"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDateTime(newestBinding)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1082,6 +1175,7 @@ export function AdminApp() {
     queryFn: () => api.getAdminUser(selectedUserId as number),
     enabled: Boolean(token && selectedUserId)
   });
+  const adminRoomsQuery = useQuery({ queryKey: ["admin-rooms"], queryFn: api.listAdminRooms, enabled: Boolean(token) });
   const tokensQuery = useQuery({ queryKey: ["admin-tokens"], queryFn: api.listAdminTokens, enabled: Boolean(token) });
   const smtpQuery = useQuery({ queryKey: ["admin-smtp"], queryFn: api.getSmtpSettings, enabled: Boolean(token) });
   const runtimeQuery = useQuery({ queryKey: ["admin-runtime"], queryFn: api.getRuntimeSettings, enabled: Boolean(token) });
@@ -1116,6 +1210,8 @@ export function AdminApp() {
   function refreshManagedUser() {
     void queryClient.invalidateQueries({ queryKey: ["admin-users"] });
     void queryClient.invalidateQueries({ queryKey: ["admin-user"] });
+    void queryClient.invalidateQueries({ queryKey: ["admin-rooms"] });
+    void queryClient.invalidateQueries({ queryKey: ["admin-status"] });
   }
 
   const updateAdminProfileMutation = useMutation({
@@ -1276,6 +1372,7 @@ export function AdminApp() {
   const nav: Array<{ key: AdminView; label: string; icon: JSX.Element }> = [
     { key: "status", label: "状态", icon: <Server size={17} /> },
     { key: "users", label: "用户", icon: <Users size={17} /> },
+    { key: "rooms", label: "宿舍", icon: <Building2 size={17} /> },
     { key: "tokens", label: "Token", icon: <KeyRound size={17} /> },
     { key: "smtp", label: "SMTP", icon: <Mail size={17} /> },
     { key: "settings", label: "设置", icon: <Database size={17} /> },
@@ -1291,7 +1388,7 @@ export function AdminApp() {
             <ShieldCheck size={19} />
           </div>
           <div>
-            <div className="text-sm font-semibold">SDU Admin</div>
+            <div className="text-sm font-semibold">Admin Console</div>
             <div className="text-xs text-muted-foreground">{meQuery.data?.username ?? "管理后台"}</div>
           </div>
         </div>
@@ -1336,7 +1433,7 @@ export function AdminApp() {
           </div>
         </header>
 
-        <nav className="grid grid-cols-4 gap-2 border-b border-border bg-panel px-3 py-2 sm:grid-cols-7 lg:hidden">
+        <nav className="grid grid-cols-4 gap-2 border-b border-border bg-panel px-3 py-2 sm:grid-cols-8 lg:hidden">
           {nav.map((item) => (
             <button
               key={item.key}
@@ -1394,6 +1491,10 @@ export function AdminApp() {
                 }
               }}
             />
+          ) : null}
+
+          {activeView === "rooms" ? (
+            <AdminRoomsPanel rooms={adminRoomsQuery.data ?? []} loading={adminRoomsQuery.isLoading} />
           ) : null}
 
           {activeView === "tokens" ? (

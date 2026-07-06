@@ -1,1 +1,1 @@
-"""Backend package for the SDU electricity platform."""
+"""Backend package for Electricity Monitor."""

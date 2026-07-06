@@ -53,8 +53,8 @@ export function AppShell({
             <BatteryCharging size={19} />
           </div>
           <div>
-            <div className="text-sm font-semibold">SDU Electricity</div>
-            <div className="text-xs text-muted-foreground">Qingdao Campus</div>
+            <div className="text-sm font-semibold">Electricity Monitor</div>
+            <div className="text-xs text-muted-foreground">Community Edition</div>
           </div>
         </div>
 

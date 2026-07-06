@@ -4,6 +4,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.binding import UserRoomOut
+from app.schemas.room import RoomOut
 
 
 class AdminLogin(BaseModel):
@@ -153,6 +154,22 @@ class AdminManagedUserRoomUpdate(BaseModel):
     manual_check_cooldown_seconds: int | None = Field(default=None, ge=0, le=60 * 60)
     notify_cooldown_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     enabled: bool | None = None
+
+
+class AdminRoomBindingOut(BaseModel):
+    binding_id: int
+    user_id: int
+    email: str
+    notification_email: str | None
+    notification_email_verified: bool
+    enabled: bool
+    created_at: datetime
+
+
+class AdminRoomOut(BaseModel):
+    room: RoomOut
+    binding_count: int
+    bindings: list[AdminRoomBindingOut]
 
 
 class AdminAuditLogOut(BaseModel):

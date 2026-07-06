@@ -18,6 +18,16 @@ function readStoredToken() {
   return window.localStorage.getItem(TOKEN_KEY);
 }
 
+function formatRetryAfter(seconds: number) {
+  if (seconds < 60) {
+    return `${Math.max(1, Math.ceil(seconds))} 秒`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} 分钟`;
+  }
+  return `${Math.ceil(minutes / 60)} 小时`;
+}
 function describeError(error: unknown) {
   if (error instanceof ApiError) {
     if (typeof error.detail === "string") {
@@ -30,7 +40,7 @@ function describeError(error: unknown) {
       error.detail.kind === "manual_check_cooldown"
     ) {
       const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 300;
-      return `手动同步冷却中，请 ${Math.max(1, retryAfter)} 秒后再试。`;
+      return `手动同步冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
     }
     if (
       error.detail &&
@@ -39,7 +49,10 @@ function describeError(error: unknown) {
       (error.detail.kind === "test_email_cooldown" || error.detail.kind === "verification_email_cooldown")
     ) {
       const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 1800;
-      return `邮件发送冷却中，请 ${Math.max(1, Math.ceil(retryAfter / 60))} 分钟后再试。`;
+      return `邮件发送冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
+    }
+    if (error.status >= 500) {
+      return "服务器处理失败，请稍后再试；如果刚刚手动刷新过，可能是冷却时间还没有同步完成。";
     }
     return JSON.stringify(error.detail);
   }
@@ -186,7 +199,10 @@ export default function App() {
       void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
       void queryClient.invalidateQueries({ queryKey: ["chart-readings"] });
     },
-    onError: (error) => setNotice(describeError(error)),
+    onError: (error) => {
+      setNotice(describeError(error));
+      void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
+    },
     onSettled: () => setCheckingId(null)
   });
 

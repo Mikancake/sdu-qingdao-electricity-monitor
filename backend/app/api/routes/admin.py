@@ -22,6 +22,8 @@ from app.schemas.admin import (
     AdminAuthTokenCreate,
     AdminAuthTokenOut,
     AdminAuthTokenUpdate,
+    AdminRoomBindingOut,
+    AdminRoomOut,
     AdminAuditLogOut,
     AdminLogin,
     AdminManagedUserDetailOut,
@@ -196,6 +198,44 @@ def get_user_detail(
     )
     base = _managed_user_out(db, user)
     return AdminManagedUserDetailOut(**base.model_dump(), rooms=rooms)
+
+
+@router.get("/rooms", response_model=list[AdminRoomOut])
+def list_admin_rooms(
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> list[AdminRoomOut]:
+    rooms = list(
+        db.scalars(
+            select(Room)
+            .join(UserRoom, UserRoom.room_id == Room.id)
+            .options(selectinload(Room.user_rooms).selectinload(UserRoom.user))
+            .distinct()
+            .order_by(Room.building_name, Room.room_number, Room.id)
+        )
+    )
+    result: list[AdminRoomOut] = []
+    for room in rooms:
+        bindings = sorted(room.user_rooms, key=lambda item: item.id)
+        result.append(
+            AdminRoomOut(
+                room=room,
+                binding_count=len(bindings),
+                bindings=[
+                    AdminRoomBindingOut(
+                        binding_id=binding.id,
+                        user_id=binding.user_id,
+                        email=binding.user.email if binding.user else "",
+                        notification_email=binding.user.notification_email if binding.user else None,
+                        notification_email_verified=binding.user.notification_email_verified if binding.user else False,
+                        enabled=binding.enabled,
+                        created_at=binding.created_at,
+                    )
+                    for binding in bindings
+                ],
+            )
+        )
+    return result
 
 
 @router.patch("/users/{user_id}", response_model=AdminManagedUserDetailOut)
@@ -438,7 +478,7 @@ def test_smtp_settings(
     payload: SmtpTestRequest,
     _: AdminUser = Depends(current_admin),
 ) -> dict[str, str]:
-    result = send_email(payload.to_email, "SDU Electricity SMTP 测试", "这是一封管理后台 SMTP 测试邮件。")
+    result = send_email(payload.to_email, "Electricity Monitor SMTP 测试", "这是一封管理后台 SMTP 测试邮件。")
     if not result.ok:
         raise HTTPException(status_code=502, detail=result.error)
     return {"status": "sent"}
@@ -473,7 +513,7 @@ def get_admin_status(
     enabled_token_count = db.scalar(select(func.count(AuthToken.id)).where(AuthToken.enabled.is_(True))) or 0
     pending_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "pending")) or 0
     failed_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "error")) or 0
-    total_rooms = db.scalar(select(func.count(Room.id))) or 0
+    total_rooms = db.scalar(select(func.count(func.distinct(UserRoom.room_id)))) or 0
     total_users = db.scalar(select(func.count(User.id))) or 0
     latest_read_at = db.scalar(select(ElectricityReading.read_at).order_by(ElectricityReading.read_at.desc()).limit(1))
     return AdminStatusOut(

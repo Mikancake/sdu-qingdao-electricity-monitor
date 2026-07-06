@@ -47,6 +47,11 @@ router = APIRouter()
 TEST_EMAIL_COOLDOWN = timedelta(minutes=30)
 
 
+def now_like(value: datetime | None = None) -> datetime:
+    tzinfo = value.tzinfo if value is not None else None
+    return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
+
+
 @router.get("/runtime-limits", response_model=RuntimeLimitsOut)
 def get_runtime_limits(
     _: User = Depends(verified_user),
@@ -119,7 +124,8 @@ def get_manual_check_available_at(db: Session, binding: UserRoom) -> datetime | 
     if last_started_at is None:
         return None
     available_at = last_started_at + timedelta(seconds=cooldown_seconds)
-    return available_at if datetime.now() < available_at else None
+    now = now_like(available_at)
+    return available_at if now < available_at else None
 
 
 def build_dashboard_item(db: Session, binding: UserRoom, *, limit: int = 24) -> UserRoomDashboardOut:
@@ -213,7 +219,8 @@ def check_my_room(
     binding = get_my_binding(db, user, binding_id)
     available_at = get_manual_check_available_at(db, binding)
     if available_at is not None:
-        retry_after_seconds = max(1, int((available_at - datetime.now()).total_seconds()))
+        now = now_like(available_at)
+        retry_after_seconds = max(1, int((available_at - now).total_seconds()))
         raise HTTPException(
             status_code=429,
             detail={
@@ -320,7 +327,7 @@ def send_my_test_email(
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> TestEmailOut:
-    now = datetime.now()
+    now = now_like(user.test_email_sent_at)
     if user.test_email_sent_at is not None:
         available_at = user.test_email_sent_at + TEST_EMAIL_COOLDOWN
         if now < available_at:

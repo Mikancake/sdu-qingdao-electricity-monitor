@@ -1,4 +1,4 @@
-# 🔋 山东大学青岛校区电量监控平台
+# 🔋 Electricity Monitor
 
 <div align="center">
 
@@ -306,10 +306,10 @@ python -m app.scripts.import_tokens
 ### 🧪 测试邮件
 
 ```text
-主题：测试邮件 - SDU Electricity
+主题：测试邮件 - Electricity Monitor
 
 这是一封测试邮件。
-如果你收到这封邮件，说明平台的 SMTP 服务和提醒邮箱配置正常。
+如果你收到这封邮件，说明 Electricity Monitor 的 SMTP 服务和提醒邮箱配置正常。
 ```
 
 ---
@@ -430,7 +430,7 @@ API 服务：
 
 ```ini
 [Unit]
-Description=SDU Electricity API
+Description=Electricity Monitor API
 After=network.target postgresql.service
 
 [Service]
@@ -448,7 +448,7 @@ worker 服务：
 
 ```ini
 [Unit]
-Description=SDU Electricity Worker
+Description=Electricity Monitor Worker
 After=network.target postgresql.service sdu-electricity-api.service
 
 [Service]
@@ -609,6 +609,6 @@ sudo systemctl restart sdu-electricity-worker
 
 **如果这个项目对你有帮助，欢迎 Star ⭐**
 
-Made for SDU Qingdao Campus
+Community Electricity Monitor
 
 </div>

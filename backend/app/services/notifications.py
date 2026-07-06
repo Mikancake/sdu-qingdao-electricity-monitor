@@ -58,27 +58,37 @@ def _recent_notification_exists(db, binding: UserRoom) -> bool:
     return existing is not None
 
 
+def _format_value(value, suffix: str = "") -> str:
+    if value is None:
+        return "暂无"
+    return f"{value}{suffix}"
+
+
 def _build_low_power_email(user: User, binding: UserRoom, stats) -> tuple[str, str]:
     room = binding.room
-    subject = f"\u7535\u91cf\u4e0d\u8db3\u63d0\u9192\uff1a{room.building_name} {room.room_number}"
-    body = (
-        f"{user.email} \u4f60\u597d\uff0c\n\n"
-        f"\u4f60\u7ed1\u5b9a\u7684\u5bbf\u820d {room.campus} {room.building_name} {room.room_number} "
-        "\u5f53\u524d\u7535\u91cf\u53ef\u80fd\u504f\u4f4e\u3002\n\n"
-        f"\u5f53\u524d\u7535\u91cf\uff1a{stats.latest_balance} \u5ea6\n"
-        f"\u9884\u8ba1\u65e5\u5747\u7528\u7535\uff1a{stats.average_daily_usage} \u5ea6/\u5929\n"
-        f"\u9884\u8ba1\u5269\u4f59\u5929\u6570\uff1a{stats.days_remaining} \u5929\n"
-        f"\u63d0\u9192\u9608\u503c\uff1a{stats.alert_threshold} \u5ea6\n\n"
-        "\u8fd9\u5c01\u90ae\u4ef6\u7531\u5c71\u5927\u9752\u5c9b\u6821\u533a\u7535\u91cf\u5e73\u53f0\u81ea\u52a8\u53d1\u9001\u3002"
-    )
-    return subject, body
+    subject = f"低电量提醒 - {room.building_name} {room.room_number}"
+    lines = [
+        "Electricity Monitor",
+        "",
+        "你绑定的宿舍当前电量可能偏低。",
+        "",
+        f"📍 位置：{room.campus} {room.building_name} {room.room_number}",
+        f"🔋 当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
+        f"⚡ 预计日均用电：{_format_value(stats.average_daily_usage, ' 度/天')}",
+        f"⏳ 预计剩余天数：{_format_value(stats.days_remaining, ' 天')}",
+        f"🚨 提醒阈值：{_format_value(stats.alert_threshold, ' 度')}",
+        "⚠️ 状态：电量偏低",
+        "",
+        "这封邮件由 Electricity Monitor 自动发送。",
+    ]
+    return subject, "\n".join(lines)
 
 
 def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom], *, test: bool = False) -> tuple[str, str]:
     subject_prefix = "测试邮件" if test else "用电日报"
-    subject = f"山大青岛校区电量平台{subject_prefix}"
+    subject = f"{subject_prefix} - Electricity Monitor"
     lines = [
-        f"{user.email} 你好，",
+        "Electricity Monitor",
         "",
         "以下是你绑定宿舍的最新电量信息：",
         "",
@@ -93,14 +103,16 @@ def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom],
             fixed_threshold=binding.low_power_threshold,
         )
         room = binding.room
+        status_text = "电量偏低" if stats.is_low_power else "正常"
+        status_icon = "⚠️" if stats.is_low_power else "✅"
         lines.extend(
             [
-                f"- {room.campus} {room.building_name} {room.room_number}",
-                f"  当前电量：{stats.latest_balance or '暂无'} 度",
-                f"  预计日均用电：{stats.average_daily_usage or '暂无'} 度/天",
-                f"  预计剩余天数：{stats.days_remaining or '暂无'} 天",
-                f"  提醒阈值：{stats.alert_threshold or '暂无'} 度",
-                f"  状态：{'电量偏低' if stats.is_low_power else '正常'}",
+                f"📍 位置：{room.campus} {room.building_name} {room.room_number}",
+                f"🔋 当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
+                f"⚡ 预计日均用电：{_format_value(stats.average_daily_usage, ' 度/天')}",
+                f"⏳ 预计剩余天数：{_format_value(stats.days_remaining, ' 天')}",
+                f"🚨 提醒阈值：{_format_value(stats.alert_threshold, ' 度')}",
+                f"{status_icon} 状态：{status_text}",
                 "",
             ]
         )
@@ -108,11 +120,11 @@ def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom],
             lines.append("  还没有历史读数，worker 下一次同步后会更准确。")
             lines.append("")
     if test:
-        lines.append("这是一封测试邮件，用于确认你的提醒邮箱可以正常接收平台邮件。")
+        lines.append("这是一封测试邮件，用于确认提醒邮箱可以正常接收 Electricity Monitor 邮件。")
     else:
-        lines.append("这是一封自动发送的用电日报。你可以在平台设置页关闭日报或调整发送间隔。")
+        lines.append("这是一封自动发送的用电日报。你可以在设置页关闭日报或调整发送间隔。")
     lines.append("")
-    lines.append("山大青岛校区电量平台")
+    lines.append("Electricity Monitor")
     return subject, "\n".join(lines)
 
 

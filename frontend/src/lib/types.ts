@@ -185,6 +185,23 @@ export interface AdminManagedUserDetail extends AdminManagedUser {
   rooms: UserRoomBinding[];
 }
 
+export interface AdminRoomBinding {
+  binding_id: number;
+  user_id: number;
+  email: string;
+  notification_email?: string | null;
+  notification_email_verified: boolean;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface AdminRoom {
+  room: Room;
+  binding_count: number;
+  bindings: AdminRoomBinding[];
+}
+
+
 export interface AdminAuditLog {
   id: number;
   admin_id?: number | null;

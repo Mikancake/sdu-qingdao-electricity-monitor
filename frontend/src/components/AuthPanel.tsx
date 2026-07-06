@@ -86,8 +86,8 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                   <BatteryCharging size={21} />
                 </div>
                 <div>
-                  <div className="text-sm font-semibold">SDU Electricity</div>
-                  <div className="text-xs text-muted-foreground">Qingdao Campus</div>
+                  <div className="text-sm font-semibold">Electricity Monitor</div>
+                  <div className="text-xs text-muted-foreground">Community Edition</div>
                 </div>
               </div>
 
@@ -143,7 +143,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                     <BatteryCharging size={21} />
                   </div>
-                  <div className="mt-4 text-sm font-semibold">SDU Electricity</div>
+                  <div className="mt-4 text-sm font-semibold">Electricity Monitor</div>
                 </div>
 
                 <div className="mb-6">
