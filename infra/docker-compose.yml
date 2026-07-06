@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sdu-electricity-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sdu_power
+      POSTGRES_USER: sdu_power
+      POSTGRES_PASSWORD: sdu_power_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdu_power -d sdu_power"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
