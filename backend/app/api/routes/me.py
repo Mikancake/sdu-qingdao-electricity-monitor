@@ -120,15 +120,20 @@ def get_manual_check_available_at(db: Session, binding: UserRoom) -> datetime | 
     )
     if cooldown_seconds <= 0:
         return None
-    last_started_at = db.scalar(
-        select(CheckAttempt.started_at)
-        .where(CheckAttempt.user_room_id == binding.id, CheckAttempt.source == "user")
-        .order_by(CheckAttempt.started_at.desc())
+    last_success_at = db.scalar(
+        select(CheckAttempt.finished_at)
+        .where(
+            CheckAttempt.user_room_id == binding.id,
+            CheckAttempt.source == "user",
+            CheckAttempt.success.is_(True),
+            CheckAttempt.finished_at.is_not(None),
+        )
+        .order_by(CheckAttempt.finished_at.desc())
         .limit(1)
     )
-    if last_started_at is None:
+    if last_success_at is None:
         return None
-    available_at = last_started_at + timedelta(seconds=cooldown_seconds)
+    available_at = last_success_at + timedelta(seconds=cooldown_seconds)
     now = now_like(available_at)
     return available_at if now < available_at else None
 
