@@ -17,6 +17,7 @@ type RoomBindingPayload = {
   campus_param?: string | null;
   room_number: string;
   alert_days: number;
+  alert_threshold_mode?: "days" | "average" | "fixed";
   low_power_threshold?: string | null;
 };
 
@@ -66,7 +67,8 @@ export function RoomsView({
   const [editingBindingId, setEditingBindingId] = useState<number | null>(null);
   const [buildingKey, setBuildingKey] = useState(DEFAULT_BUILDING_KEY);
   const [roomNumber, setRoomNumber] = useState("");
-  const [alertDays, setAlertDays] = useState(3);
+  const [alertDays, setAlertDays] = useState(1);
+  const [thresholdMode, setThresholdMode] = useState<"days" | "average" | "fixed">("days");
   const [threshold, setThreshold] = useState("");
 
   const editingBinding = bindings.find((binding) => binding.id === editingBindingId) ?? null;
@@ -88,7 +90,8 @@ export function RoomsView({
     setEditingBindingId(null);
     setBuildingKey(DEFAULT_BUILDING_KEY);
     setRoomNumber("");
-    setAlertDays(3);
+    setAlertDays(1);
+    setThresholdMode("days");
     setThreshold("");
   }
 
@@ -97,14 +100,16 @@ export function RoomsView({
     setBuildingKey(resolveBindingBuildingKey(buildings, binding));
     setRoomNumber(binding.room.room_number);
     setAlertDays(binding.alert_days);
+    setThresholdMode(binding.alert_threshold_mode ?? (binding.low_power_threshold ? "fixed" : "days"));
     setThreshold(binding.low_power_threshold ? String(binding.low_power_threshold) : "");
   }
 
   function buildPayload(): RoomBindingPayload {
     const payload: RoomBindingPayload = {
       room_number: roomNumber.trim(),
-      alert_days: alertDays,
-      low_power_threshold: threshold.trim() ? threshold.trim() : null
+      alert_days: Math.max(1, Number(alertDays) || 1),
+      alert_threshold_mode: thresholdMode,
+      low_power_threshold: thresholdMode === "fixed" && threshold.trim() ? threshold.trim() : null
     };
 
     if (buildingKey) {
@@ -139,7 +144,9 @@ export function RoomsView({
         <CardHeader>
           <CardTitle>{isEditing ? "编辑宿舍" : "绑定宿舍"}</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            {isEditing ? "修改宿舍楼、宿舍号和提醒阈值。" : "选择宿舍楼并填写宿舍号，平台会自动匹配学校查询参数。"}
+            {isEditing
+              ? "修改宿舍楼、宿舍号和提醒阈值，保存时会重新查询一次电量。"
+              : "选择宿舍楼并填写宿舍号，添加时会先查询一次电量，用来确认宿舍存在。"}
           </p>
         </CardHeader>
         <CardContent>
@@ -165,30 +172,53 @@ export function RoomsView({
                 required
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3">
               <div>
-                <Label htmlFor="days">提醒天数</Label>
-                <Input
-                  id="days"
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={alertDays}
-                  onChange={(event) => setAlertDays(Number(event.target.value))}
-                />
+                <Label htmlFor="threshold-mode">提醒方式</Label>
+                <Select
+                  id="threshold-mode"
+                  value={thresholdMode}
+                  onChange={(event) => setThresholdMode(event.target.value as "days" | "average" | "fixed")}
+                >
+                  <option value="days">按可用天数提醒</option>
+                  <option value="average">低于 1 天用电量提醒</option>
+                  <option value="fixed">按固定电量提醒</option>
+                </Select>
               </div>
-              <div>
-                <Label htmlFor="threshold">固定阈值</Label>
-                <Input
-                  id="threshold"
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={threshold}
-                  onChange={(event) => setThreshold(event.target.value)}
-                  placeholder="可选"
-                />
-              </div>
+              {thresholdMode === "days" ? (
+                <div>
+                  <Label htmlFor="days">低于多少天用电量时提醒</Label>
+                  <Input
+                    id="days"
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={alertDays}
+                    onChange={(event) => setAlertDays(Number(event.target.value))}
+                  />
+                  <div className="mt-1 text-xs text-muted-foreground">默认 1 天；日均用电不足 24 小时读数时会先按默认 5 度/天估算。</div>
+                </div>
+              ) : null}
+              {thresholdMode === "fixed" ? (
+                <div>
+                  <Label htmlFor="threshold">固定电量阈值</Label>
+                  <Input
+                    id="threshold"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    value={threshold}
+                    onChange={(event) => setThreshold(event.target.value)}
+                    placeholder="例如 10"
+                  />
+                  <div className="mt-1 text-xs text-muted-foreground">当前电量低于这个数值时发送提醒。</div>
+                </div>
+              ) : null}
+              {thresholdMode === "average" ? (
+                <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                  电量低于 1 天用电量时提醒。读数不足 24 小时时，会先按默认 5 度/天估算。
+                </div>
+              ) : null}
             </div>
             <Button className="w-full" disabled={formSaving || !roomNumber.trim()}>
               {formSaving ? <Loader2 className="animate-spin" size={16} /> : isEditing ? <Save size={16} /> : <Plus size={16} />}
@@ -246,7 +276,11 @@ export function RoomsView({
                           </div>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">
-                          {binding.low_power_threshold ? formatKwh(binding.low_power_threshold) : `${binding.alert_days} 天余量`}
+                          {binding.alert_threshold_mode === "fixed" && binding.low_power_threshold
+                            ? `低于 ${formatKwh(binding.low_power_threshold)}`
+                            : binding.alert_threshold_mode === "average"
+                              ? "低于 1 天用电量"
+                              : `低于约 ${binding.alert_days} 天余量`}
                         </td>
                         <td className="px-4 py-3">
                           <Badge tone={binding.enabled ? "success" : "muted"}>{binding.enabled ? "启用" : "停用"}</Badge>

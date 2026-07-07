@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,11 +12,17 @@ from app.models.email_verification_code import EmailVerificationCode
 from app.models.user import User
 from app.schemas.auth import EmailVerifyRequest, RegisterOut, TokenOut, UserCreate, UserLogin, UserOut
 from app.services.emailer import send_verification_code
+from app.services.rate_limit import enforce_rate_limit, rate_limit_key
 from app.services.users import delete_user_account
 
 
 router = APIRouter()
 VERIFICATION_EMAIL_COOLDOWN = timedelta(minutes=30)
+
+
+def now_like(value: datetime | None = None) -> datetime:
+    tzinfo = value.tzinfo if value is not None else None
+    return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
 
 
 def normalize_email(email: str) -> str:
@@ -40,7 +46,7 @@ def create_verification_code(
         code_hash=hash_password(code),
         password_hash=password_hash,
         purpose=purpose,
-        expires_at=datetime.now() + timedelta(minutes=15),
+        expires_at=now_like() + timedelta(minutes=15),
     )
     db.add(record)
     return record, code
@@ -54,7 +60,7 @@ def consume_pending_register_codes(db: Session, email: str) -> None:
             EmailVerificationCode.purpose == "register",
             EmailVerificationCode.consumed_at.is_(None),
         )
-        .values(consumed_at=datetime.now())
+        .values(consumed_at=now_like())
     )
 
 
@@ -64,7 +70,6 @@ def clean_legacy_unverified_user(db: Session, user: User | None) -> None:
 
 
 def ensure_verification_email_not_cooling(db: Session, email: str, purpose: str) -> None:
-    now = datetime.now()
     latest_delivered_at = db.scalar(
         select(EmailVerificationCode.delivered_at)
         .where(
@@ -77,6 +82,7 @@ def ensure_verification_email_not_cooling(db: Session, email: str, purpose: str)
     )
     if latest_delivered_at is None:
         return
+    now = now_like(latest_delivered_at)
     available_at = latest_delivered_at + VERIFICATION_EMAIL_COOLDOWN
     if now < available_at:
         raise HTTPException(
@@ -92,7 +98,7 @@ def ensure_verification_email_not_cooling(db: Session, email: str, purpose: str)
 
 def mark_verification_email_delivered(db: Session, record: EmailVerificationCode, email_sent: bool) -> None:
     if email_sent:
-        record.delivered_at = datetime.now()
+        record.delivered_at = now_like(record.delivered_at)
         db.commit()
 
 
@@ -104,9 +110,10 @@ def deliver_verification_code(email: str, code: str) -> bool:
 
 
 @router.post("/register", response_model=RegisterOut, status_code=status.HTTP_201_CREATED)
-def register(payload: UserCreate, db: Session = Depends(db_session)) -> RegisterOut:
+def register(request: Request, payload: UserCreate, db: Session = Depends(db_session)) -> RegisterOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(rate_limit_key(request, "auth:register", email), limit=20, window_seconds=60 * 60)
     existing_user = db.scalar(select(User).where(User.email == email))
     if existing_user is not None and existing_user.is_verified:
         raise HTTPException(status_code=409, detail="email already registered")
@@ -126,9 +133,10 @@ def register(payload: UserCreate, db: Session = Depends(db_session)) -> Register
 
 
 @router.post("/request-verification-code", response_model=RegisterOut)
-def request_verification_code(payload: UserLogin, db: Session = Depends(db_session)) -> RegisterOut:
+def request_verification_code(request: Request, payload: UserLogin, db: Session = Depends(db_session)) -> RegisterOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(rate_limit_key(request, "auth:request-code", email), limit=15, window_seconds=60 * 60)
     user = db.scalar(select(User).where(User.email == email))
     if user is not None:
         if not verify_password(payload.password, user.password_hash):
@@ -148,10 +156,11 @@ def request_verification_code(payload: UserLogin, db: Session = Depends(db_sessi
 
 
 @router.post("/verify-email", response_model=UserOut)
-def verify_email(payload: EmailVerifyRequest, db: Session = Depends(db_session)) -> User:
+def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = Depends(db_session)) -> User:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
-    now = datetime.now()
+    enforce_rate_limit(rate_limit_key(request, "auth:verify-email", email), limit=60, window_seconds=15 * 60)
+    now = now_like()
     stmt = (
         select(EmailVerificationCode)
         .where(
@@ -177,7 +186,7 @@ def verify_email(payload: EmailVerifyRequest, db: Session = Depends(db_session))
     else:
         user.is_verified = True
     user.notification_email = user.email
-    user.notification_email_verified_at = now
+    user.notification_email_verified_at = now_like(user.notification_email_verified_at)
     db.execute(
         update(EmailVerificationCode)
         .where(
@@ -197,8 +206,9 @@ def verify_email(payload: EmailVerifyRequest, db: Session = Depends(db_session))
 
 
 @router.post("/login", response_model=TokenOut)
-def login(payload: UserLogin, db: Session = Depends(db_session)) -> TokenOut:
+def login(request: Request, payload: UserLogin, db: Session = Depends(db_session)) -> TokenOut:
     email = normalize_email(payload.email)
+    enforce_rate_limit(rate_limit_key(request, "auth:login", email), limit=30, window_seconds=10 * 60)
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="invalid email or password")

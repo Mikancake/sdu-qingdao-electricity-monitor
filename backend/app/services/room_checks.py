@@ -11,6 +11,8 @@ from app.electricity.client import CampusElectricityClient
 from app.models.check_attempt import CheckAttempt
 from app.models.electricity_reading import ElectricityReading
 from app.models.room import Room
+from app.models.user import User
+from app.models.user_room import UserRoom
 from app.services.runtime_settings import get_runtime_config
 from app.services.token_pool import select_available_token
 
@@ -106,10 +108,21 @@ def latest_read_at(db: Session, room_id: int) -> datetime | None:
     )
 
 
+def bound_room_statement():
+    return (
+        select(Room)
+        .join(UserRoom, UserRoom.room_id == Room.id)
+        .join(User, User.id == UserRoom.user_id)
+        .where(UserRoom.enabled.is_(True), User.is_verified.is_(True))
+        .distinct()
+        .order_by(Room.id)
+    )
+
+
 def list_due_rooms(db: Session, *, limit: int | None = None) -> list[Room]:
     runtime = get_runtime_config(db)
     interval = timedelta(seconds=runtime.check_interval_seconds)
-    rooms = list(db.scalars(select(Room).order_by(Room.id)))
+    rooms = list(db.scalars(bound_room_statement()))
     due: list[Room] = []
     for room in rooms:
         last_read_at = latest_read_at(db, room.id)
@@ -140,7 +153,7 @@ def run_room_checks(
         effective_limit = limit if limit is not None else runtime.check_batch_size or fallback_limit
         delay = runtime.check_request_delay_seconds if delay_seconds is None else delay_seconds
         if check_all:
-            stmt = select(Room).order_by(Room.id)
+            stmt = bound_room_statement()
             if use_batch_limit:
                 stmt = stmt.limit(effective_limit)
             rooms = list(db.scalars(stmt))

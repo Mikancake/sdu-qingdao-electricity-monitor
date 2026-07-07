@@ -99,6 +99,13 @@ class RuntimeSettingsOut(BaseModel):
     usage_history_days: int
     manual_check_cooldown_seconds: int
     worker_idle_seconds: int
+    max_rooms_per_user: int
+    verification_code_retention_days: int
+    check_attempt_retention_days: int
+    notification_retention_days: int
+    electricity_reading_retention_days: int
+    admin_audit_log_retention_days: int
+    retention_cleanup_hour: int
 
 
 class RuntimeSettingsUpdate(BaseModel):
@@ -112,6 +119,32 @@ class RuntimeSettingsUpdate(BaseModel):
     usage_history_days: int | None = Field(default=None, ge=1, le=365)
     manual_check_cooldown_seconds: int | None = Field(default=None, ge=0, le=60 * 60)
     worker_idle_seconds: int | None = Field(default=None, ge=1, le=300)
+    max_rooms_per_user: int | None = Field(default=None, ge=1, le=100)
+    verification_code_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    check_attempt_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    notification_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    electricity_reading_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    admin_audit_log_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    retention_cleanup_hour: int | None = Field(default=None, ge=0, le=23)
+
+
+class DataRetentionCleanupOut(BaseModel):
+    verification_codes_deleted: int
+    check_attempts_deleted: int
+    notifications_deleted: int
+    electricity_readings_deleted: int
+    admin_audit_logs_deleted: int
+    total_deleted: int
+
+
+class RateLimitClearRequest(BaseModel):
+    bucket: str | None = Field(default=None, max_length=80)
+    client_ip: str | None = Field(default=None, max_length=80)
+    identity: str | None = Field(default=None, max_length=255)
+
+
+class RateLimitClearOut(BaseModel):
+    cleared_keys: int
 
 
 class AdminStatusOut(BaseModel):
@@ -150,6 +183,7 @@ class AdminManagedUserUpdate(BaseModel):
 
 class AdminManagedUserRoomUpdate(BaseModel):
     alert_days: int | None = Field(default=None, ge=1, le=30)
+    alert_threshold_mode: str | None = Field(default=None, pattern="^(days|average|fixed)$")
     low_power_threshold: Decimal | None = Field(default=None, ge=0)
     manual_check_cooldown_seconds: int | None = Field(default=None, ge=0, le=60 * 60)
     notify_cooldown_hours: int | None = Field(default=None, ge=0, le=24 * 30)

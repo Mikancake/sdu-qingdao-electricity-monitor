@@ -26,7 +26,7 @@ def main() -> int:
         print("password must be at least 8 characters")
         return 1
 
-    create_schema(engine)
+    create_schema(engine, ensure_admin=False)
     with SessionLocal() as db:
         admin = db.scalar(select(AdminUser).where(AdminUser.username == username))
         if admin is not None and not args.reset_password:

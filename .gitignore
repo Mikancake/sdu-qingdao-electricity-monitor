@@ -39,6 +39,7 @@ env/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+backend/uploads/
 *.tsbuildinfo
 __pycache__/
 *.py[cod]

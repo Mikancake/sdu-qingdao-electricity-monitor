@@ -22,8 +22,9 @@ import {
   X
 } from "lucide-react";
 
-import { ApiError, createApiClient } from "../lib/api";
+import { ApiError, createApiClient, getApiErrorMessage } from "../lib/api";
 import type {
+  AppearanceSettings,
   AdminAuditLog,
   AdminAuthToken,
   AdminManagedUser,
@@ -33,10 +34,12 @@ import type {
   SmtpSettings
 } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
+import { AppearanceSettingsPanel } from "./AppearanceSettingsPanel";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input, Label } from "./ui/input";
+import { NoticeDialog } from "./NoticeDialog";
 
 const ADMIN_TOKEN_KEY = "sdu-electricity-admin-token";
 const ADMIN_THEME_KEY = "sdu-electricity-theme";
@@ -51,7 +54,7 @@ function describeError(error: unknown) {
     if (typeof error.detail === "string") {
       return error.detail;
     }
-    return JSON.stringify(error.detail);
+    return getApiErrorMessage(error);
   }
   if (error instanceof Error) {
     return error.message;
@@ -78,7 +81,7 @@ function AdminLogin({ onLogin }: { onLogin: (token: string) => void }) {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+    <main className="app-background flex min-h-screen items-center justify-center px-4 py-10">
       <Card className="w-full max-w-[420px]">
         <CardHeader>
           <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -223,6 +226,7 @@ function AdminUserRoomEditor({
     bindingId: number,
     payload: {
       alert_days?: number;
+      alert_threshold_mode?: "days" | "average" | "fixed";
       low_power_threshold?: string | null;
       manual_check_cooldown_seconds?: number | null;
       notify_cooldown_hours?: number | null;
@@ -233,6 +237,9 @@ function AdminUserRoomEditor({
 }) {
   const [enabled, setEnabled] = useState(binding.enabled);
   const [alertDays, setAlertDays] = useState(String(binding.alert_days));
+  const [thresholdMode, setThresholdMode] = useState<"days" | "average" | "fixed">(
+    binding.alert_threshold_mode ?? (binding.low_power_threshold ? "fixed" : "days")
+  );
   const [threshold, setThreshold] = useState(binding.low_power_threshold ?? "");
   const [cooldown, setCooldown] = useState(binding.manual_check_cooldown_seconds?.toString() ?? "");
   const [notifyCooldown, setNotifyCooldown] = useState(binding.notify_cooldown_hours?.toString() ?? "");
@@ -240,6 +247,7 @@ function AdminUserRoomEditor({
   useEffect(() => {
     setEnabled(binding.enabled);
     setAlertDays(String(binding.alert_days));
+    setThresholdMode(binding.alert_threshold_mode ?? (binding.low_power_threshold ? "fixed" : "days"));
     setThreshold(binding.low_power_threshold ?? "");
     setCooldown(binding.manual_check_cooldown_seconds?.toString() ?? "");
     setNotifyCooldown(binding.notify_cooldown_hours?.toString() ?? "");
@@ -261,28 +269,50 @@ function AdminUserRoomEditor({
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <div>
-          <Label htmlFor={`admin-alert-days-${binding.id}`}>提醒天数</Label>
-          <Input
-            id={`admin-alert-days-${binding.id}`}
-            type="number"
-            min={1}
-            max={30}
-            value={alertDays}
-            onChange={(event) => setAlertDays(event.target.value)}
-          />
+          <Label htmlFor={`admin-threshold-mode-${binding.id}`}>提醒方式</Label>
+          <select
+            id={`admin-threshold-mode-${binding.id}`}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+            value={thresholdMode}
+            onChange={(event) => setThresholdMode(event.target.value as "days" | "average" | "fixed")}
+          >
+            <option value="days">按可用天数提醒</option>
+            <option value="average">低于 1 天用电量提醒</option>
+            <option value="fixed">按固定电量提醒</option>
+          </select>
         </div>
-        <div>
-          <Label htmlFor={`admin-threshold-${binding.id}`}>固定阈值</Label>
-          <Input
-            id={`admin-threshold-${binding.id}`}
-            type="number"
-            min={0}
-            step="0.1"
-            value={threshold}
-            onChange={(event) => setThreshold(event.target.value)}
-            placeholder="继承估算"
-          />
-        </div>
+        {thresholdMode === "days" ? (
+          <div>
+            <Label htmlFor={`admin-alert-days-${binding.id}`}>低于多少天用电量时提醒</Label>
+            <Input
+              id={`admin-alert-days-${binding.id}`}
+              type="number"
+              min={1}
+              max={30}
+              value={alertDays}
+              onChange={(event) => setAlertDays(event.target.value)}
+            />
+          </div>
+        ) : null}
+        {thresholdMode === "fixed" ? (
+          <div>
+            <Label htmlFor={`admin-threshold-${binding.id}`}>固定电量阈值</Label>
+            <Input
+              id={`admin-threshold-${binding.id}`}
+              type="number"
+              min={0}
+              step="0.1"
+              value={threshold}
+              onChange={(event) => setThreshold(event.target.value)}
+              placeholder="例如 10"
+            />
+          </div>
+        ) : null}
+        {thresholdMode === "average" ? (
+          <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            低于 1 天用电量时提醒；读数不足 24 小时时先按默认日均用电估算。
+          </div>
+        ) : null}
         <div>
           <Label htmlFor={`admin-notify-cooldown-${binding.id}`}>邮件间隔</Label>
           <Input
@@ -314,7 +344,8 @@ function AdminUserRoomEditor({
             onSave(binding.id, {
               enabled,
               alert_days: Math.max(1, Number(alertDays) || binding.alert_days),
-              low_power_threshold: threshold.trim() ? threshold.trim() : null,
+              alert_threshold_mode: thresholdMode,
+              low_power_threshold: thresholdMode === "fixed" && threshold.trim() ? threshold.trim() : null,
               manual_check_cooldown_seconds: cooldown.trim() ? Math.max(0, Number(cooldown)) : null,
               notify_cooldown_hours: notifyCooldown.trim() ? Math.max(0, Number(notifyCooldown)) : null
             })
@@ -364,6 +395,7 @@ function UsersPanel({
     bindingId: number,
     payload: {
       alert_days?: number;
+      alert_threshold_mode?: "days" | "average" | "fixed";
       low_power_threshold?: string | null;
       manual_check_cooldown_seconds?: number | null;
       notify_cooldown_hours?: number | null;
@@ -977,16 +1009,51 @@ function SmtpPanel({
   );
 }
 
+type RuntimeNumberSettingKey =
+  | "check_interval_seconds"
+  | "check_batch_size"
+  | "check_request_delay_seconds"
+  | "notify_interval_seconds"
+  | "notify_cooldown_hours"
+  | "worker_idle_seconds"
+  | "manual_check_cooldown_seconds"
+  | "max_rooms_per_user"
+  | "verification_code_retention_days"
+  | "check_attempt_retention_days"
+  | "notification_retention_days"
+  | "electricity_reading_retention_days"
+  | "admin_audit_log_retention_days"
+  | "retention_cleanup_hour";
+
 function RuntimeSettingsPanel({
   runtime,
+  appearance,
   onSave,
-  saving
+  onSaveAppearance,
+  onUploadAppearanceBackground,
+  onRunDataRetentionCleanup,
+  onClearRateLimits,
+  saving,
+  savingAppearance,
+  cleaningRetention,
+  clearingRateLimits
 }: {
   runtime?: RuntimeSettings;
+  appearance?: AppearanceSettings | null;
   onSave: (payload: Partial<RuntimeSettings>) => void;
+  onSaveAppearance: (payload: Partial<AppearanceSettings>) => void;
+  onUploadAppearanceBackground: (theme: "light" | "dark", file: File) => Promise<{ theme: "light" | "dark"; url: string }>;
+  onRunDataRetentionCleanup: () => void;
+  onClearRateLimits: (payload: { bucket?: string | null; client_ip?: string | null; identity?: string | null }) => void;
   saving: boolean;
+  savingAppearance: boolean;
+  cleaningRetention: boolean;
+  clearingRateLimits: boolean;
 }) {
   const [form, setForm] = useState<RuntimeSettings | null>(null);
+  const [rateLimitIp, setRateLimitIp] = useState("");
+  const [rateLimitIdentity, setRateLimitIdentity] = useState("");
+  const [rateLimitBucket, setRateLimitBucket] = useState("");
 
   useEffect(() => {
     if (runtime) setForm(runtime);
@@ -1001,12 +1068,20 @@ function RuntimeSettingsPanel({
     );
   }
 
-  function setNumber(key: keyof RuntimeSettings, value: string) {
+  function setNumber(key: RuntimeNumberSettingKey, value: string) {
     setForm((current) => (current ? { ...current, [key]: Number(value) } : current));
   }
 
   return (
-    <Card>
+    <div className="grid gap-5">
+      <AppearanceSettingsPanel
+        appearance={appearance}
+        saving={savingAppearance}
+        onSave={onSaveAppearance}
+        onUploadBackground={onUploadAppearanceBackground}
+      />
+
+      <Card>
       <CardHeader>
         <CardTitle>全局任务设置</CardTitle>
       </CardHeader>
@@ -1051,13 +1126,158 @@ function RuntimeSettingsPanel({
               onChange={(event) => setNumber("manual_check_cooldown_seconds", event.target.value)}
             />
           </div>
+          <div>
+            <Label htmlFor="max-rooms-per-user">每用户宿舍上限</Label>
+            <Input
+              id="max-rooms-per-user"
+              type="number"
+              min={1}
+              max={100}
+              value={form.max_rooms_per_user}
+              onChange={(event) => setNumber("max_rooms_per_user", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="verification-retention">验证码记录保留（天）</Label>
+            <Input
+              id="verification-retention"
+              type="number"
+              min={0}
+              value={form.verification_code_retention_days}
+              onChange={(event) => setNumber("verification_code_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="attempt-retention">检查记录保留（天）</Label>
+            <Input
+              id="attempt-retention"
+              type="number"
+              min={0}
+              value={form.check_attempt_retention_days}
+              onChange={(event) => setNumber("check_attempt_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="notification-retention">通知记录保留（天）</Label>
+            <Input
+              id="notification-retention"
+              type="number"
+              min={0}
+              value={form.notification_retention_days}
+              onChange={(event) => setNumber("notification_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="reading-retention">电量历史保留（天）</Label>
+            <Input
+              id="reading-retention"
+              type="number"
+              min={0}
+              value={form.electricity_reading_retention_days}
+              onChange={(event) => setNumber("electricity_reading_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="audit-retention">审计日志保留（天）</Label>
+            <Input
+              id="audit-retention"
+              type="number"
+              min={0}
+              value={form.admin_audit_log_retention_days}
+              onChange={(event) => setNumber("admin_audit_log_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="cleanup-hour">每日清理时间（0-23 点）</Label>
+            <Input
+              id="cleanup-hour"
+              type="number"
+              min={0}
+              max={23}
+              value={form.retention_cleanup_hour}
+              onChange={(event) => setNumber("retention_cleanup_hour", event.target.value)}
+            />
+          </div>
         </div>
-        <Button disabled={saving} onClick={() => onSave(form)}>
-          {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-          保存全局设置
-        </Button>
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          保留天数填 0 表示不自动清理。worker 会每天按上面的时间执行一次，也可以在这里手动清理已过期数据。
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={saving} onClick={() => onSave(form)}>
+            {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存全局设置
+          </Button>
+          <Button disabled={cleaningRetention} onClick={onRunDataRetentionCleanup} variant="secondary">
+            {cleaningRetention ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+            立即清理过期数据
+          </Button>
+        </div>
       </CardContent>
-    </Card>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>防滥用限制</CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            当同学因为短时间多次登录、注册或验证被临时限制时，可以在这里清除对应 IP 或邮箱的限流记录。
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <Label htmlFor="rate-limit-ip">IP 地址</Label>
+              <Input
+                id="rate-limit-ip"
+                value={rateLimitIp}
+                onChange={(event) => setRateLimitIp(event.target.value)}
+                placeholder="例如 10.102.1.23"
+              />
+            </div>
+            <div>
+              <Label htmlFor="rate-limit-identity">邮箱或账号</Label>
+              <Input
+                id="rate-limit-identity"
+                value={rateLimitIdentity}
+                onChange={(event) => setRateLimitIdentity(event.target.value)}
+                placeholder="可选，例如 name@example.com"
+              />
+            </div>
+            <div>
+              <Label htmlFor="rate-limit-bucket">限制类型</Label>
+              <select
+                id="rate-limit-bucket"
+                className="h-9 w-full rounded-md border border-border/75 bg-panel/70 px-3 text-sm text-foreground shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                value={rateLimitBucket}
+                onChange={(event) => setRateLimitBucket(event.target.value)}
+              >
+                <option value="">全部类型</option>
+                <option value="auth:register">注册</option>
+                <option value="auth:request-code">重新发送验证码</option>
+                <option value="auth:verify-email">邮箱验证</option>
+                <option value="auth:login">登录</option>
+              </select>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            只填 IP 会清除这个 IP 的全部匹配记录；只填邮箱会清除这个邮箱的匹配记录；都不填则会清除所有内存限流记录。
+          </div>
+          <Button
+            disabled={clearingRateLimits}
+            onClick={() =>
+              onClearRateLimits({
+                bucket: rateLimitBucket || null,
+                client_ip: rateLimitIp.trim() || null,
+                identity: rateLimitIdentity.trim() || null
+              })
+            }
+            variant="secondary"
+          >
+            {clearingRateLimits ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+            清除限流记录
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -1208,6 +1428,7 @@ export function AdminApp() {
   const adminRoomsQuery = useQuery({ queryKey: ["admin-rooms"], queryFn: api.listAdminRooms, enabled: Boolean(token) });
   const tokensQuery = useQuery({ queryKey: ["admin-tokens"], queryFn: api.listAdminTokens, enabled: Boolean(token) });
   const smtpQuery = useQuery({ queryKey: ["admin-smtp"], queryFn: api.getSmtpSettings, enabled: Boolean(token) });
+  const appearanceQuery = useQuery({ queryKey: ["admin-appearance"], queryFn: api.getAppearanceSettings, enabled: Boolean(token) });
   const runtimeQuery = useQuery({ queryKey: ["admin-runtime"], queryFn: api.getRuntimeSettings, enabled: Boolean(token) });
   const auditLogsQuery = useQuery({ queryKey: ["admin-audit-logs"], queryFn: api.listAdminAuditLogs, enabled: Boolean(token) });
 
@@ -1370,12 +1591,47 @@ export function AdminApp() {
     onError: (error) => setNotice(describeError(error))
   });
 
+  const appearanceMutation = useMutation({
+    mutationFn: api.updateAppearanceSettings,
+    onSuccess: () => {
+      setNotice("全局外观已保存。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-appearance"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const appearanceUploadMutation = useMutation({
+    mutationFn: api.uploadAppearanceBackground,
+    onSuccess: (result) => setNotice(`${result.theme === "light" ? "亮色" : "暗色"}背景已上传，请保存全局外观。`),
+    onError: (error) => setNotice(describeError(error))
+  });
+
   const runtimeMutation = useMutation({
     mutationFn: api.updateRuntimeSettings,
     onSuccess: () => {
       setNotice("全局设置已保存。");
       void queryClient.invalidateQueries({ queryKey: ["admin-runtime"] });
       refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const dataRetentionCleanupMutation = useMutation({
+    mutationFn: api.runAdminDataRetentionCleanup,
+    onSuccess: (result) => {
+      setNotice(`过期数据清理完成：共删除 ${result.total_deleted} 条。`);
+      void queryClient.invalidateQueries({ queryKey: ["admin-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const clearRateLimitsMutation = useMutation({
+    mutationFn: api.clearAdminRateLimits,
+    onSuccess: (result) => {
+      setNotice(`限流记录已清除：${result.cleared_keys} 条。`);
+      void queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setNotice(describeError(error))
   });
@@ -1411,8 +1667,8 @@ export function AdminApp() {
   ];
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-border bg-panel lg:flex lg:flex-col">
+    <div className="app-background min-h-screen text-foreground">
+      <aside className="glass-panel fixed inset-y-0 left-0 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <ShieldCheck size={19} />
@@ -1446,7 +1702,7 @@ export function AdminApp() {
       </aside>
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur lg:px-6">
+        <header className="glass-panel sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border/70 px-4 lg:px-6">
           <div>
             <div className="text-sm font-semibold">管理后台</div>
             <div className="text-xs text-muted-foreground">{meQuery.data?.display_name || meQuery.data?.username || "正在读取管理员"}</div>
@@ -1463,7 +1719,7 @@ export function AdminApp() {
           </div>
         </header>
 
-        <nav className="grid grid-cols-4 gap-2 border-b border-border bg-panel px-3 py-2 sm:grid-cols-8 lg:hidden">
+        <nav className="glass-panel grid grid-cols-4 gap-2 border-b border-border/70 px-3 py-2 sm:grid-cols-8 lg:hidden">
           {nav.map((item) => (
             <button
               key={item.key}
@@ -1480,14 +1736,7 @@ export function AdminApp() {
         </nav>
 
         <main className="mx-auto w-full max-w-7xl px-4 py-5 lg:px-6">
-          {notice ? (
-            <div className="mb-4 flex items-center justify-between rounded-lg border border-border bg-panel px-4 py-3 text-sm shadow-soft">
-              <span className="text-muted-foreground">{notice}</span>
-              <button className="text-xs text-primary" onClick={() => setNotice(null)} type="button">
-                关闭
-              </button>
-            </div>
-          ) : null}
+          <NoticeDialog message={notice} onClose={() => setNotice(null)} />
 
           {activeView === "status" ? (
             <StatusPanel
@@ -1561,8 +1810,16 @@ export function AdminApp() {
           {activeView === "settings" ? (
             <RuntimeSettingsPanel
               runtime={runtimeQuery.data}
+              appearance={appearanceQuery.data}
               saving={runtimeMutation.isPending}
+              savingAppearance={appearanceMutation.isPending}
               onSave={(payload) => runtimeMutation.mutate(payload)}
+              onSaveAppearance={(payload) => appearanceMutation.mutate(payload)}
+              onUploadAppearanceBackground={(theme, file) => appearanceUploadMutation.mutateAsync({ theme, file })}
+              onRunDataRetentionCleanup={() => dataRetentionCleanupMutation.mutate()}
+              cleaningRetention={dataRetentionCleanupMutation.isPending}
+              onClearRateLimits={(payload) => clearRateLimitsMutation.mutate(payload)}
+              clearingRateLimits={clearRateLimitsMutation.isPending}
             />
           ) : null}
 

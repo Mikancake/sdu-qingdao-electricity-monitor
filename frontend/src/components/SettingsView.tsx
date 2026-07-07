@@ -9,6 +9,7 @@ import { Input, Label } from "./ui/input";
 
 type BindingUpdatePayload = {
   alert_days?: number;
+  alert_threshold_mode?: "days" | "average" | "fixed";
   low_power_threshold?: string | null;
   manual_check_cooldown_seconds?: number | null;
   notify_cooldown_hours?: number | null;
@@ -59,6 +60,9 @@ function BindingAlertForm({
 }: BindingAlertFormProps) {
   const [enabled, setEnabled] = useState(binding.enabled);
   const [alertDays, setAlertDays] = useState(String(binding.alert_days));
+  const [thresholdMode, setThresholdMode] = useState<"days" | "average" | "fixed">(
+    binding.alert_threshold_mode ?? (binding.low_power_threshold ? "fixed" : "days")
+  );
   const [threshold, setThreshold] = useState(binding.low_power_threshold ?? "");
   const [cooldown, setCooldown] = useState(binding.manual_check_cooldown_seconds?.toString() ?? "");
   const [notifyCooldown, setNotifyCooldown] = useState(binding.notify_cooldown_hours?.toString() ?? "");
@@ -68,6 +72,7 @@ function BindingAlertForm({
   useEffect(() => {
     setEnabled(binding.enabled);
     setAlertDays(String(binding.alert_days));
+    setThresholdMode(binding.alert_threshold_mode ?? (binding.low_power_threshold ? "fixed" : "days"));
     setThreshold(binding.low_power_threshold ?? "");
     setCooldown(binding.manual_check_cooldown_seconds?.toString() ?? "");
     setNotifyCooldown(binding.notify_cooldown_hours?.toString() ?? "");
@@ -103,7 +108,8 @@ function BindingAlertForm({
     const payload: BindingUpdatePayload = {
       enabled,
       alert_days: days,
-      low_power_threshold: nextThreshold ? nextThreshold : null
+      alert_threshold_mode: thresholdMode,
+      low_power_threshold: thresholdMode === "fixed" && nextThreshold ? nextThreshold : null
     };
 
     if (cooldownTouched) {
@@ -126,7 +132,7 @@ function BindingAlertForm({
             </div>
             <Badge tone={enabled ? "success" : "muted"}>{enabled ? "提醒开启" : "提醒关闭"}</Badge>
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">按剩余天数估算，也可以单独覆盖邮件间隔和立即同步冷却。</div>
+          <div className="mt-1 text-xs text-muted-foreground">可以按可用天数、1 天用电量或固定电量提醒，也可以单独覆盖邮件间隔和立即同步冷却。</div>
         </div>
 
         <label className="inline-flex select-none items-center gap-2 text-sm text-muted-foreground">
@@ -140,30 +146,54 @@ function BindingAlertForm({
         </label>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_auto] xl:items-start">
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto] xl:items-start">
         <div>
-          <Label htmlFor={`alert-days-${binding.id}`}>剩余天数提醒</Label>
-          <Input
-            id={`alert-days-${binding.id}`}
-            type="number"
-            min={1}
-            max={30}
-            value={alertDays}
-            onChange={(event) => setAlertDays(event.target.value)}
-          />
+          <Label htmlFor={`threshold-mode-${binding.id}`}>提醒方式</Label>
+          <select
+            id={`threshold-mode-${binding.id}`}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+            value={thresholdMode}
+            onChange={(event) => setThresholdMode(event.target.value as "days" | "average" | "fixed")}
+          >
+            <option value="days">按可用天数提醒</option>
+            <option value="average">低于 1 天用电量提醒</option>
+            <option value="fixed">按固定电量提醒</option>
+          </select>
         </div>
-        <div>
-          <Label htmlFor={`threshold-${binding.id}`}>固定电量阈值</Label>
-          <Input
-            id={`threshold-${binding.id}`}
-            type="number"
-            min={0}
-            step="0.1"
-            value={threshold}
-            onChange={(event) => setThreshold(event.target.value)}
-            placeholder="不填则按天数估算"
-          />
-        </div>
+        {thresholdMode === "days" ? (
+          <div>
+            <Label htmlFor={`alert-days-${binding.id}`}>低于多少天用电量时提醒</Label>
+            <Input
+              id={`alert-days-${binding.id}`}
+              type="number"
+              min={1}
+              max={30}
+              value={alertDays}
+              onChange={(event) => setAlertDays(event.target.value)}
+            />
+            <div className="mt-1 text-xs text-muted-foreground">默认 1 天；读数不足 24 小时时先按默认 5 度/天估算。</div>
+          </div>
+        ) : null}
+        {thresholdMode === "fixed" ? (
+          <div>
+            <Label htmlFor={`threshold-${binding.id}`}>固定电量阈值</Label>
+            <Input
+              id={`threshold-${binding.id}`}
+              type="number"
+              min={0}
+              step="0.1"
+              value={threshold}
+              onChange={(event) => setThreshold(event.target.value)}
+              placeholder="例如 10"
+            />
+            <div className="mt-1 text-xs text-muted-foreground">当前电量低于这个数值时提醒。</div>
+          </div>
+        ) : null}
+        {thresholdMode === "average" ? (
+          <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            电量低于 1 天用电量时提醒。读数不足 24 小时时先按默认 5 度/天估算。
+          </div>
+        ) : null}
         <div>
           <Label htmlFor={`notify-cooldown-${binding.id}`}>邮件间隔覆盖（小时）</Label>
           <Input

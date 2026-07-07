@@ -3,7 +3,11 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import App from "./App";
+import { applyStoredAppearanceSettings, loadGlobalAppearanceSettings } from "./lib/appearance";
 import "./styles.css";
+
+applyStoredAppearanceSettings();
+void loadGlobalAppearanceSettings();
 
 const queryClient = new QueryClient({
   defaultOptions: {

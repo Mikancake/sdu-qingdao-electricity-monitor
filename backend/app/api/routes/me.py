@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import db_session, verified_user
 from app.core.config import settings
 from app.core.security import verify_password
+from app.electricity.client import CampusElectricityClient
 from app.models.check_attempt import CheckAttempt
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.electricity_reading import ElectricityReading
@@ -37,8 +38,10 @@ from app.api.routes.auth import (
 )
 from app.services.room_checks import check_and_store_room
 from app.services.notifications import send_test_email_for_user
+from app.services.rate_limit import enforce_rate_limit, rate_limit_key
 from app.services.rooms import RoomInputError, normalize_room_data
 from app.services.runtime_settings import get_runtime_config
+from app.services.token_pool import select_available_token
 from app.services.usage import get_room_usage_stats, list_room_readings
 from app.services.users import delete_user_account
 
@@ -62,6 +65,7 @@ def get_runtime_limits(
     return RuntimeLimitsOut(
         manual_check_cooldown_seconds=runtime.manual_check_cooldown_seconds,
         notify_cooldown_hours=runtime.notify_cooldown_hours,
+        max_rooms_per_user=runtime.max_rooms_per_user,
     )
 
 
@@ -96,6 +100,40 @@ def find_or_create_room_from_data(db: Session, data: dict) -> Room:
 
 def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
     return find_or_create_room_from_data(db, payload.model_dump())
+
+
+def query_room_balance_once(db: Session, room: Room):
+    token = select_available_token(db)
+    if token is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "token_unavailable", "message": "当前没有可用的查询 Token，请稍后再试。"},
+        )
+
+    result = CampusElectricityClient(token.token_value).query_room(room)
+    token.last_used_at = datetime.now()
+    if result.success and result.balance is not None:
+        return result.balance
+
+    if result.error_kind == "auth":
+        status_code = 502
+        message = "查询 Token 已失效，请联系管理员更新。"
+    elif result.error_kind == "network":
+        status_code = 502
+        message = "电量查询接口暂时连接失败，请稍后再试。"
+    else:
+        status_code = 422
+        message = "没有查询到这个宿舍的电量，请检查宿舍楼和宿舍号是否正确。"
+
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "kind": "room_check_failed",
+            "message": message,
+            "error_kind": result.error_kind,
+            "error_msg": result.error_msg,
+        },
+    )
 
 
 def get_my_binding(db: Session, user: User, binding_id: int) -> UserRoom:
@@ -143,6 +181,7 @@ def build_dashboard_item(db: Session, binding: UserRoom, *, limit: int = 24) -> 
         db,
         binding.room_id,
         alert_days=binding.alert_days,
+        alert_threshold_mode=binding.alert_threshold_mode,
         fixed_threshold=binding.low_power_threshold,
     )
     recent_readings = list(reversed(readings[-limit:]))
@@ -150,6 +189,7 @@ def build_dashboard_item(db: Session, binding: UserRoom, *, limit: int = 24) -> 
         binding_id=binding.id,
         room=binding.room,
         alert_days=binding.alert_days,
+        alert_threshold_mode=binding.alert_threshold_mode,
         low_power_threshold=binding.low_power_threshold,
         enabled=binding.enabled,
         manual_check_available_at=get_manual_check_available_at(db, binding),
@@ -188,20 +228,42 @@ def list_my_room_summaries(
 
 @router.post("/rooms", response_model=UserRoomOut, status_code=status.HTTP_201_CREATED)
 def bind_my_room(
+    request: Request,
     payload: UserRoomCreate,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> UserRoom:
+    enforce_rate_limit(rate_limit_key(request, "me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+    runtime = get_runtime_config(db)
+    bound_count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user.id)) or 0
+    if bound_count >= runtime.max_rooms_per_user:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "room_bind_limit",
+                "message": f"最多只能绑定 {runtime.max_rooms_per_user} 个宿舍",
+                "max_rooms_per_user": runtime.max_rooms_per_user,
+            },
+        )
     room = find_or_create_room(db, payload)
+    existing_binding_id = db.scalar(
+        select(UserRoom.id).where(UserRoom.user_id == user.id, UserRoom.room_id == room.id).limit(1)
+    )
+    if existing_binding_id is not None:
+        raise HTTPException(status_code=409, detail="room already bound")
+    balance = query_room_balance_once(db, room)
     binding = UserRoom(
         user_id=user.id,
         room_id=room.id,
         alert_days=payload.alert_days,
+        alert_threshold_mode=payload.alert_threshold_mode,
         low_power_threshold=payload.low_power_threshold,
         enabled=True,
     )
     db.add(binding)
     try:
+        db.flush()
+        db.add(ElectricityReading(room_id=room.id, balance=balance, source="bind"))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -222,11 +284,13 @@ def get_my_room_summary(
 
 @router.post("/rooms/{binding_id}/check", response_model=ElectricityReadingOut)
 def check_my_room(
+    request: Request,
     binding_id: int,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> ElectricityReading:
     binding = get_my_binding(db, user, binding_id)
+    enforce_rate_limit(rate_limit_key(request, "me:manual-check", user.id, binding.id), limit=20, window_seconds=60 * 60)
     available_at = get_manual_check_available_at(db, binding)
     if available_at is not None:
         now = now_like(available_at)
@@ -334,9 +398,11 @@ def update_my_preferences(
 
 @router.post("/test-email", response_model=TestEmailOut)
 def send_my_test_email(
+    request: Request,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> TestEmailOut:
+    enforce_rate_limit(rate_limit_key(request, "me:test-email", user.id), limit=6, window_seconds=60 * 60)
     now = now_like(user.test_email_sent_at)
     if user.test_email_sent_at is not None:
         available_at = user.test_email_sent_at + TEST_EMAIL_COOLDOWN
@@ -361,12 +427,14 @@ def send_my_test_email(
 
 @router.post("/notification-email/request-code", response_model=VerificationCodeOut)
 def request_notification_email_code(
+    request: Request,
     payload: NotificationEmailRequest,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> VerificationCodeOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(rate_limit_key(request, "me:notification-email-code", user.id, email), limit=6, window_seconds=60 * 60)
     ensure_verification_email_not_cooling(db, email, "notification_email")
     record, code = create_verification_code(db, email, purpose="notification_email")
     db.commit()
@@ -377,12 +445,14 @@ def request_notification_email_code(
 
 @router.post("/notification-email/verify", response_model=UserOut)
 def verify_notification_email(
+    request: Request,
     payload: NotificationEmailVerifyRequest,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> User:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(rate_limit_key(request, "me:notification-email-verify", user.id, email), limit=20, window_seconds=15 * 60)
     now = datetime.now()
     stmt = (
         select(EmailVerificationCode)
@@ -450,9 +520,20 @@ def update_my_room_binding(
                 else binding.room.building_param
             )
         room = find_or_create_room_from_data(db, room_payload)
+        existing_binding_id = db.scalar(
+            select(UserRoom.id)
+            .where(UserRoom.user_id == user.id, UserRoom.room_id == room.id, UserRoom.id != binding.id)
+            .limit(1)
+        )
+        if existing_binding_id is not None:
+            raise HTTPException(status_code=409, detail="room already bound")
+        balance = query_room_balance_once(db, room)
         binding.room_id = room.id
+        db.add(ElectricityReading(room_id=room.id, balance=balance, source="room_update"))
     if payload.alert_days is not None:
         binding.alert_days = payload.alert_days
+    if payload.alert_threshold_mode is not None:
+        binding.alert_threshold_mode = payload.alert_threshold_mode
     if "low_power_threshold" in payload.model_fields_set:
         binding.low_power_threshold = payload.low_power_threshold
     if "manual_check_cooldown_seconds" in payload.model_fields_set:

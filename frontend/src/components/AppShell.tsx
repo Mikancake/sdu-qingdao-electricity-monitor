@@ -46,8 +46,8 @@ export function AppShell({
   onToggleTheme
 }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-border bg-panel lg:flex lg:flex-col">
+    <div className="app-background min-h-screen text-foreground">
+      <aside className="glass-panel fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <BatteryCharging size={19} />
@@ -76,8 +76,8 @@ export function AppShell({
         </nav>
 
         <div className="border-t border-border p-3">
-          <div className="mb-3 flex items-center gap-3 rounded-lg bg-muted px-3 py-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-panel text-muted-foreground">
+          <div className="glass-tile mb-3 flex items-center gap-3 rounded-lg border border-border/60 px-3 py-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-panel/70 text-muted-foreground">
               <UserRound size={16} />
             </div>
             <div className="min-w-0">
@@ -93,7 +93,7 @@ export function AppShell({
       </aside>
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur lg:px-6">
+        <header className="glass-panel sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border/70 px-4 lg:px-6">
           <div className="min-w-0">
             <div className="text-sm font-semibold">
               {activeView === "dashboard"
@@ -119,7 +119,7 @@ export function AppShell({
           </div>
         </header>
 
-        <nav className="grid grid-cols-4 gap-2 border-b border-border bg-panel px-3 py-2 lg:hidden">
+        <nav className="glass-panel grid grid-cols-4 gap-2 border-b border-border/70 px-3 py-2 lg:hidden">
           {navItems.map((item) => (
             <button
               key={item.key}

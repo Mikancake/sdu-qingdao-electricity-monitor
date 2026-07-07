@@ -1,12 +1,16 @@
 import json
 from datetime import datetime
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
+from app.core.config import settings
 from app.api.routes.auth import ensure_email_shape, normalize_email
 from app.core.security import hash_password, sign_access_token, verify_password
 from app.models.admin_audit_log import AdminAuditLog
@@ -35,22 +39,35 @@ from app.schemas.admin import (
     AdminStatusOut,
     AdminTokenOut,
     AdminUserOut,
+    DataRetentionCleanupOut,
+    RateLimitClearOut,
+    RateLimitClearRequest,
     RuntimeSettingsOut,
     RuntimeSettingsUpdate,
     SmtpSettingsOut,
     SmtpSettingsUpdate,
     SmtpTestRequest,
 )
+from app.schemas.appearance import AppearanceBackgroundUploadOut, AppearanceSettingsOut, AppearanceSettingsUpdate
 from app.schemas.binding import UserRoomOut
 from app.services.admins import normalize_username
+from app.services.appearance import get_appearance_settings, update_appearance_settings
+from app.services.data_retention import cleanup_data_retention
 from app.services.emailer import load_smtp_config, send_email
 from app.services.notifications import run_low_power_notifications
+from app.services.rate_limit import enforce_rate_limit, limiter, rate_limit_key
 from app.services.room_checks import run_room_checks
 from app.services.runtime_settings import get_runtime_config, update_runtime_config
 from app.services.users import delete_user_account
 
 
 router = APIRouter()
+ALLOWED_APPEARANCE_IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/avif": ".avif",
+}
 
 
 def audit(db: Session, admin: AdminUser, action: str, target_type: str, target_id: object | None, detail: dict | None = None) -> None:
@@ -111,8 +128,9 @@ def _smtp_out(row: SmtpSettings | None = None) -> SmtpSettingsOut:
 
 
 @router.post("/auth/login", response_model=AdminTokenOut)
-def admin_login(payload: AdminLogin, db: Session = Depends(db_session)) -> AdminTokenOut:
+def admin_login(request: Request, payload: AdminLogin, db: Session = Depends(db_session)) -> AdminTokenOut:
     username = normalize_username(payload.username)
+    enforce_rate_limit(rate_limit_key(request, "admin:login", username), limit=8, window_seconds=10 * 60)
     admin = db.scalar(select(AdminUser).where(AdminUser.username == username))
     if admin is None or not admin.enabled or not verify_password(payload.password, admin.password_hash):
         raise HTTPException(status_code=401, detail="invalid username or password")
@@ -314,6 +332,9 @@ def update_user_room_config(
     if payload.alert_days is not None:
         binding.alert_days = payload.alert_days
         changed.append("alert_days")
+    if payload.alert_threshold_mode is not None:
+        binding.alert_threshold_mode = payload.alert_threshold_mode
+        changed.append("alert_threshold_mode")
     if "low_power_threshold" in payload.model_fields_set:
         binding.low_power_threshold = payload.low_power_threshold
         changed.append("low_power_threshold")
@@ -484,6 +505,63 @@ def test_smtp_settings(
     return {"status": "sent"}
 
 
+@router.get("/appearance", response_model=AppearanceSettingsOut)
+def get_admin_appearance_settings(
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> AppearanceSettingsOut:
+    return get_appearance_settings(db)
+
+
+@router.patch("/appearance", response_model=AppearanceSettingsOut)
+def patch_admin_appearance_settings(
+    payload: AppearanceSettingsUpdate,
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> AppearanceSettingsOut:
+    settings = update_appearance_settings(db, payload.model_dump(exclude_unset=True))
+    audit(db, admin, "update_appearance_settings", "app_settings", "appearance_settings", {"fields": list(payload.model_fields_set)})
+    db.commit()
+    return settings
+
+
+@router.post("/appearance/background", response_model=AppearanceBackgroundUploadOut)
+async def upload_appearance_background(
+    theme: Literal["light", "dark"] = Form(default="light"),
+    file: UploadFile = File(...),
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> AppearanceBackgroundUploadOut:
+    suffix = ALLOWED_APPEARANCE_IMAGE_TYPES.get(file.content_type or "")
+    if suffix is None:
+        raise HTTPException(status_code=400, detail="only jpg, png, webp, and avif images are supported")
+
+    upload_root = Path(settings.upload_dir) / "appearance"
+    upload_root.mkdir(parents=True, exist_ok=True)
+    filename = f"{theme}-{uuid4().hex}{suffix}"
+    target = upload_root / filename
+
+    written = 0
+    try:
+        with target.open("wb") as handle:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > settings.appearance_upload_max_bytes:
+                    raise HTTPException(status_code=413, detail="image is too large")
+                handle.write(chunk)
+    except Exception:
+        if target.exists():
+            target.unlink()
+        raise
+    finally:
+        await file.close()
+
+    url = f"/uploads/appearance/{filename}"
+    audit(db, admin, "upload_appearance_background", "app_settings", "appearance_settings", {"theme": theme, "url": url})
+    db.commit()
+    return AppearanceBackgroundUploadOut(theme=theme, url=url)
+
+
 @router.get("/settings", response_model=RuntimeSettingsOut)
 def get_runtime_settings(
     _: AdminUser = Depends(current_admin),
@@ -550,3 +628,37 @@ def run_notifications_once(
 ) -> dict[str, int]:
     result = run_low_power_notifications()
     return {"scanned": result.scanned, "sent": result.sent, "skipped": result.skipped, "failed": result.failed}
+
+
+@router.post("/jobs/data-retention/run", response_model=DataRetentionCleanupOut)
+def run_data_retention_once(
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> DataRetentionCleanupOut:
+    result = cleanup_data_retention(db)
+    audit(db, admin, "run_data_retention_cleanup", "app_settings", None, {"total_deleted": result.total_deleted})
+    db.commit()
+    return DataRetentionCleanupOut(**result.__dict__, total_deleted=result.total_deleted)
+
+
+@router.post("/rate-limits/clear", response_model=RateLimitClearOut)
+def clear_rate_limit_records(
+    payload: RateLimitClearRequest,
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> RateLimitClearOut:
+    cleared_keys = limiter.clear_matching(
+        bucket=payload.bucket,
+        client_ip=payload.client_ip,
+        identity=payload.identity,
+    )
+    audit(
+        db,
+        admin,
+        "clear_rate_limits",
+        "rate_limit",
+        payload.client_ip or payload.identity or payload.bucket or "all",
+        {"bucket": payload.bucket, "client_ip": payload.client_ip, "identity": payload.identity, "cleared_keys": cleared_keys},
+    )
+    db.commit()
+    return RateLimitClearOut(cleared_keys=cleared_keys)

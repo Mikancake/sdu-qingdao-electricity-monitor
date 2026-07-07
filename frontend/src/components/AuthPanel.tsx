@@ -1,9 +1,8 @@
 import { FormEvent, useMemo, useState } from "react";
 import { BatteryCharging, Bell, Building2, KeyRound, Loader2, Mail, ShieldCheck } from "lucide-react";
 
-import { ApiError, createApiClient } from "../lib/api";
+import { ApiError, createApiClient, getApiErrorMessage } from "../lib/api";
 import { Button } from "./ui/button";
-import { Card, CardContent } from "./ui/card";
 import { Input, Label } from "./ui/input";
 
 interface AuthPanelProps {
@@ -57,11 +56,27 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
         return;
       }
 
+      if (code.trim().length < 4) {
+        setError("验证码至少需要 4 位，请检查后再提交。");
+        return;
+      }
       await api.verifyEmail({ email, code });
       setMode("login");
       setMessage("邮箱已验证，可以登录。");
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (
+        mode === "register" &&
+        err instanceof ApiError &&
+        err.detail &&
+        typeof err.detail === "object" &&
+        "kind" in err.detail &&
+        err.detail.kind === "verification_email_cooldown"
+      ) {
+        setMode("verify");
+        setMessage("验证码刚刚发送过，请填写刚才收到的验证码。");
+        return;
+      }
+      setError(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -76,10 +91,10 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
         : "输入收到的验证码完成账号验证。";
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
-      <div className="w-full max-w-[980px] overflow-hidden rounded-xl border border-border bg-panel shadow-soft">
+    <main className="app-background flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="auth-shell glass-card w-full max-w-[1040px] overflow-hidden rounded-lg border border-border shadow-soft">
         <div className="grid min-h-[620px] lg:grid-cols-[1fr_420px]">
-          <section className="hidden border-r border-border bg-muted/40 p-8 lg:flex lg:flex-col lg:justify-between">
+          <section className="auth-brand-pane hidden p-8 lg:flex lg:flex-col lg:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -99,7 +114,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
             </div>
 
             <div className="grid gap-3">
-              <div className="rounded-lg border border-border bg-panel p-4">
+              <div className="glass-tile rounded-lg border border-border/70 p-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
                     <Mail size={18} />
@@ -110,7 +125,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                   </div>
                 </div>
               </div>
-              <div className="rounded-lg border border-border bg-panel p-4">
+              <div className="glass-tile rounded-lg border border-border/70 p-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
                     <Building2 size={18} />
@@ -121,7 +136,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                   </div>
                 </div>
               </div>
-              <div className="rounded-lg border border-border bg-panel p-4">
+              <div className="glass-tile rounded-lg border border-border/70 p-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
                     <Bell size={18} />
@@ -135,98 +150,104 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
             </div>
           </section>
 
-          <section className="flex items-center p-6 sm:p-8">
-            <Card className="w-full border-0 shadow-none">
-              <CardContent className="p-0">
-                <div className="mb-8 lg:hidden">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                    <BatteryCharging size={21} />
-                  </div>
-                  <div className="mt-4 text-sm font-semibold">Electricity Monitor</div>
+          <section className="auth-form-region flex items-center justify-center p-6 sm:p-8 lg:p-10">
+            <div className="auth-form-panel w-full max-w-[360px]">
+              <div className="mb-8 lg:hidden">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                  <BatteryCharging size={21} />
+                </div>
+                <div className="mt-4 text-sm font-semibold">Electricity Monitor</div>
+              </div>
+
+              <div className="mb-6">
+                <h2 className="text-2xl font-semibold tracking-normal">{title}</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{subtitle}</p>
+              </div>
+
+              <div className="auth-mode-tabs mb-6 flex rounded-lg border border-border/70 p-1">
+                <button
+                  className={`h-8 flex-1 rounded-md text-sm transition ${
+                    mode === "login" ? "bg-panel/90 text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setMode("login")}
+                  type="button"
+                >
+                  登录
+                </button>
+                <button
+                  className={`h-8 flex-1 rounded-md text-sm transition ${
+                    mode !== "login" ? "bg-panel/90 text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setMode("register")}
+                  type="button"
+                >
+                  注册
+                </button>
+              </div>
+
+              <form className="space-y-4" onSubmit={submit}>
+                <div>
+                  <Label htmlFor="email">邮箱</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    autoComplete="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    required
+                  />
                 </div>
 
-                <div className="mb-6">
-                  <h2 className="text-2xl font-semibold tracking-normal">{title}</h2>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{subtitle}</p>
-                </div>
-
-                <div className="mb-6 flex rounded-lg border border-border bg-muted p-1">
-                  <button
-                    className={`h-8 flex-1 rounded-md text-sm transition ${
-                      mode === "login" ? "bg-panel text-foreground shadow-sm" : "text-muted-foreground"
-                    }`}
-                    onClick={() => setMode("login")}
-                    type="button"
-                  >
-                    登录
-                  </button>
-                  <button
-                    className={`h-8 flex-1 rounded-md text-sm transition ${
-                      mode !== "login" ? "bg-panel text-foreground shadow-sm" : "text-muted-foreground"
-                    }`}
-                    onClick={() => setMode("register")}
-                    type="button"
-                  >
-                    注册
-                  </button>
-                </div>
-
-                <form className="space-y-4" onSubmit={submit}>
+                {mode !== "verify" ? (
                   <div>
-                    <Label htmlFor="email">邮箱</Label>
+                    <Label htmlFor="password">密码</Label>
                     <Input
-                      id="email"
-                      type="email"
-                      value={email}
-                      autoComplete="email"
-                      onChange={(event) => setEmail(event.target.value)}
-                      placeholder="you@example.com"
+                      id="password"
+                      type="password"
+                      value={password}
+                      autoComplete={mode === "login" ? "current-password" : "new-password"}
+                      onChange={(event) => setPassword(event.target.value)}
+                      minLength={8}
                       required
                     />
                   </div>
+                ) : (
+                  <div>
+                    <Label htmlFor="code">验证码</Label>
+                    <Input
+                      id="code"
+                      value={code}
+                      inputMode="numeric"
+                      minLength={4}
+                      maxLength={12}
+                      onChange={(event) => setCode(event.target.value)}
+                      required
+                    />
+                  </div>
+                )}
 
-                  {mode !== "verify" ? (
-                    <div>
-                      <Label htmlFor="password">密码</Label>
-                      <Input
-                        id="password"
-                        type="password"
-                        value={password}
-                        autoComplete={mode === "login" ? "current-password" : "new-password"}
-                        onChange={(event) => setPassword(event.target.value)}
-                        minLength={8}
-                        required
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <Label htmlFor="code">验证码</Label>
-                      <Input id="code" value={code} onChange={(event) => setCode(event.target.value)} required />
-                    </div>
-                  )}
+                {devCode ? (
+                  <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
+                    开发验证码：<span className="font-semibold">{devCode}</span>
+                  </div>
+                ) : null}
 
-                  {devCode ? (
-                    <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
-                      开发验证码：<span className="font-semibold">{devCode}</span>
-                    </div>
-                  ) : null}
+                {message ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success/10 px-3 py-2 text-sm text-success">
+                    <ShieldCheck size={15} />
+                    {message}
+                  </div>
+                ) : null}
 
-                  {message ? (
-                    <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success/10 px-3 py-2 text-sm text-success">
-                      <ShieldCheck size={15} />
-                      {message}
-                    </div>
-                  ) : null}
+                {error ? <div className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
 
-                  {error ? <div className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
-
-                  <Button className="w-full" disabled={loading}>
-                    {loading ? <Loader2 className="animate-spin" size={16} /> : mode === "login" ? <KeyRound size={16} /> : <Mail size={16} />}
-                    {mode === "login" ? "登录" : mode === "register" ? "继续" : "完成验证"}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
+                <Button className="w-full" disabled={loading}>
+                  {loading ? <Loader2 className="animate-spin" size={16} /> : mode === "login" ? <KeyRound size={16} /> : <Mail size={16} />}
+                  {mode === "login" ? "登录" : mode === "register" ? "继续" : "完成验证"}
+                </Button>
+              </form>
+            </div>
           </section>
         </div>
       </div>

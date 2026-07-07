@@ -20,6 +20,13 @@ class RuntimeConfig:
     usage_history_days: int = settings.usage_history_days
     manual_check_cooldown_seconds: int = 300
     worker_idle_seconds: int = 10
+    max_rooms_per_user: int = settings.max_rooms_per_user
+    verification_code_retention_days: int = settings.verification_code_retention_days
+    check_attempt_retention_days: int = settings.check_attempt_retention_days
+    notification_retention_days: int = settings.notification_retention_days
+    electricity_reading_retention_days: int = settings.electricity_reading_retention_days
+    admin_audit_log_retention_days: int = settings.admin_audit_log_retention_days
+    retention_cleanup_hour: int = settings.retention_cleanup_hour
 
 
 RUNTIME_DEFAULTS = RuntimeConfig()

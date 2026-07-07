@@ -16,6 +16,19 @@
   --danger: 0 70% 50%;
   --warning: 35 92% 42%;
   --success: 160 84% 34%;
+  --app-bg-image: none;
+  --app-bg-image-light: none;
+  --app-bg-image-dark: none;
+  --app-bg-image-active: var(--app-bg-image-light);
+  --app-bg-position: center;
+  --app-bg-overlay-opacity: 0.42;
+  --app-bg-blur: 0px;
+  --glass-card-opacity: 0.62;
+  --glass-card-blur: 10px;
+  --glass-material-strength: 0.7;
+  --glass-shadow: 0 20px 48px -32px rgba(15, 23, 42, 0.52);
+  --glass-edge: hsl(var(--foreground) / 0.16);
+  --glass-noise-opacity: 0;
 }
 
 .dark {
@@ -32,6 +45,12 @@
   --danger: 0 72% 58%;
   --warning: 38 92% 52%;
   --success: 160 72% 45%;
+  --app-bg-overlay-opacity: 0.48;
+  --glass-card-opacity: 0.5;
+  --glass-shadow: 0 20px 52px -30px rgba(0, 0, 0, 0.72);
+  --glass-edge: hsl(var(--foreground) / 0.16);
+  --glass-noise-opacity: 0;
+  --app-bg-image-active: var(--app-bg-image-dark);
 }
 
 * {
@@ -42,17 +61,346 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: hsl(var(--background));
+  background:
+    linear-gradient(135deg, hsl(var(--background)), hsl(150 32% 94%), hsl(26 48% 94%));
   color: hsl(var(--foreground));
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   letter-spacing: 0;
 }
 
+.dark body {
+  background:
+    linear-gradient(135deg, hsl(var(--background)), hsl(190 34% 14%), hsl(28 28% 13%));
+}
+
 button,
 input,
 select {
   font: inherit;
+}
+
+.app-background {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+}
+
+.app-background::before,
+.app-background::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.app-background::before {
+  z-index: -2;
+  background-image:
+    var(--app-bg-image-active),
+    linear-gradient(135deg, hsl(199 76% 92%), hsl(142 44% 93%) 48%, hsl(28 70% 94%));
+  background-position: var(--app-bg-position), center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  filter: none;
+  transform: none;
+  transform-origin: center;
+}
+
+.dark .app-background::before {
+  background-image:
+    var(--app-bg-image-active),
+    linear-gradient(135deg, hsl(222 28% 8%), hsl(190 34% 16%) 50%, hsl(28 28% 15%));
+}
+
+.app-background::after {
+  z-index: -1;
+  background-color: hsl(var(--background) / var(--app-bg-overlay-opacity));
+  background-image:
+    linear-gradient(hsl(var(--foreground) / 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.055) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, black, black 78%, transparent);
+}
+
+html[data-background-blur="on"] .app-background::before {
+  filter: blur(var(--app-bg-blur)) saturate(1.06);
+  transform: scale(1.025);
+}
+
+.glass-card,
+.glass-panel,
+.glass-tile {
+  isolation: isolate;
+  overflow: hidden;
+  border-color: var(--glass-edge);
+  background: hsl(var(--panel) / var(--glass-card-opacity));
+  contain: paint;
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 hsl(var(--foreground) / 0.1),
+    inset 0 -1px 0 hsl(var(--foreground) / 0.06);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.glass-card,
+.glass-tile,
+.glass-panel:not(.fixed):not(.sticky) {
+  position: relative;
+}
+
+.dark .glass-card,
+.dark .glass-panel,
+.dark .glass-tile {
+  background: hsl(var(--panel) / var(--glass-card-opacity));
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 hsl(var(--foreground) / 0.08),
+    inset 0 -1px 0 hsl(0 0% 0% / 0.24);
+}
+
+html[data-glass-mode="frosted"] .glass-panel.fixed,
+html[data-glass-mode="frosted"] .glass-panel.sticky,
+html[data-glass-mode="frosted"] .auth-shell {
+  background:
+    linear-gradient(145deg, hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08)), hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.08))),
+    hsl(var(--panel) / var(--glass-card-opacity));
+  backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.08) brightness(0.98);
+  -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.08) brightness(0.98);
+}
+
+.dark[data-glass-mode="frosted"] .glass-panel.fixed,
+.dark[data-glass-mode="frosted"] .glass-panel.sticky,
+.dark[data-glass-mode="frosted"] .auth-shell {
+  background:
+    linear-gradient(145deg, hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08)), hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.08))),
+    hsl(220 16% 10% / var(--glass-card-opacity));
+}
+
+.glass-card::before,
+.glass-panel::before,
+.glass-tile::before {
+  content: "";
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: none;
+  pointer-events: none;
+  z-index: 0;
+}
+
+html[data-glass-mode="lite"] .glass-card::before,
+html[data-glass-mode="lite"] .glass-panel::before,
+html[data-glass-mode="lite"] .glass-tile::before,
+html[data-glass-mode="frosted"] .glass-card::before,
+html[data-glass-mode="frosted"] .glass-panel::before,
+html[data-glass-mode="frosted"] .glass-tile::before {
+  display: block;
+  inset: -18px;
+  background:
+    radial-gradient(ellipse at 25% 15%, hsl(var(--primary) / 0.08), transparent 48%),
+    linear-gradient(135deg, hsl(var(--foreground) / 0.035), transparent 42%, hsl(var(--primary) / 0.035));
+  filter: none;
+  opacity: var(--glass-material-strength);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transform: translateZ(0);
+}
+
+.glass-card::after,
+.glass-panel::after,
+.glass-tile::after {
+  content: "";
+  display: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(hsl(var(--foreground) / 0.08) 0.55px, transparent 0.65px),
+    linear-gradient(to bottom, transparent 62%, hsl(var(--foreground) / 0.045));
+  background-size: 4px 4px, auto;
+  opacity: var(--glass-noise-opacity);
+  z-index: 0;
+}
+
+html[data-glass-mode="frosted"] .glass-card::after,
+html[data-glass-mode="frosted"] .glass-panel::after,
+html[data-glass-mode="frosted"] .glass-tile::after {
+  display: block;
+  background:
+    radial-gradient(hsl(var(--foreground) / 0.08) 0.55px, transparent 0.65px),
+    linear-gradient(135deg, transparent, hsl(var(--foreground) / 0.05));
+  background-size: 4px 4px, auto;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  opacity: 0.22;
+}
+
+.glass-card > *,
+.glass-panel > *,
+.glass-tile > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dark .glass-card::after,
+.dark .glass-panel::after,
+.dark .glass-tile::after {
+  background:
+    radial-gradient(hsl(var(--foreground) / 0.08) 0.55px, transparent 0.65px),
+    linear-gradient(to bottom, transparent 62%, hsl(0 0% 0% / 0.14));
+  background-size: 4px 4px, auto;
+}
+
+.glass-panel {
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.04));
+}
+
+.glass-tile {
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.06));
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.08),
+    0 10px 28px -24px rgba(15, 23, 42, 0.45);
+}
+
+html[data-glass-mode="frosted"] .glass-panel,
+html[data-glass-mode="frosted"] .glass-tile {
+  background:
+    linear-gradient(180deg, hsl(var(--foreground) / 0.05), hsl(var(--primary) / 0.05)),
+    hsl(214 13% 28% / calc(var(--glass-card-opacity) - 0.2));
+}
+
+.dark[data-glass-mode="frosted"] .glass-panel,
+.dark[data-glass-mode="frosted"] .glass-tile {
+  background:
+    linear-gradient(180deg, hsl(var(--foreground) / 0.04), hsl(var(--primary) / 0.04)),
+    hsl(220 16% 10% / calc(var(--glass-card-opacity) - 0.04));
+}
+
+html[data-glass-mode="liquid"] .glass-card,
+html[data-glass-mode="liquid"] .glass-panel,
+html[data-glass-mode="liquid"] .glass-tile {
+  background:
+    radial-gradient(ellipse at 20% 10%, hsl(var(--primary) / 0.12), transparent 46%),
+    radial-gradient(ellipse at 82% 92%, hsl(var(--foreground) / 0.06), transparent 44%),
+    linear-gradient(145deg, hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08)), hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.1)));
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 hsl(var(--foreground) / 0.08),
+    inset 0 -1px 0 hsl(var(--primary) / 0.12);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-glass-mode="liquid"] .glass-card::before,
+html[data-glass-mode="liquid"] .glass-panel::before,
+html[data-glass-mode="liquid"] .glass-tile::before {
+  display: block;
+  inset: -22px;
+  background:
+    radial-gradient(ellipse at 28% 18%, hsl(var(--primary) / 0.11), transparent 46%),
+    radial-gradient(ellipse at 78% 86%, hsl(var(--foreground) / 0.055), transparent 44%),
+    linear-gradient(120deg, hsl(var(--panel) / 0.08), transparent 46%, hsl(var(--primary) / 0.05));
+  filter: none;
+  opacity: calc(var(--glass-material-strength) + 0.08);
+  transform: translateZ(0);
+}
+
+html[data-glass-mode="liquid"] .glass-card::after,
+html[data-glass-mode="liquid"] .glass-panel::after,
+html[data-glass-mode="liquid"] .glass-tile::after {
+  display: block;
+  background:
+    radial-gradient(ellipse at 50% 44%, transparent 0 38%, hsl(var(--foreground) / 0.04) 60%, transparent 73%),
+    linear-gradient(135deg, hsl(var(--foreground) / 0.035), transparent 36%, hsl(var(--primary) / 0.05));
+  opacity: 0.48;
+}
+
+.auth-form-region {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, hsl(var(--foreground) / 0.035), transparent 30%),
+    hsl(var(--panel) / 0.04);
+}
+
+.auth-form-region::before {
+  content: "";
+  position: absolute;
+  inset: 8% auto 8% 0;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, hsl(var(--border) / 0.42), transparent);
+  pointer-events: none;
+}
+
+.auth-form-region::after {
+  display: none;
+}
+
+.auth-form-panel {
+  position: relative;
+  z-index: 2;
+}
+
+.auth-shell::before {
+  display: none;
+  background:
+    linear-gradient(to bottom, hsl(var(--primary) / 0.06), transparent 34%),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.03), transparent 22%, transparent 82%, hsl(var(--foreground) / 0.02));
+}
+
+html[data-glass-mode="frosted"] .auth-shell::before {
+  display: block;
+}
+
+.auth-brand-pane {
+  position: relative;
+  background:
+    linear-gradient(135deg, hsl(var(--muted) / 0.08), transparent 56%);
+}
+
+.auth-mode-tabs {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, hsl(var(--foreground) / 0.06), hsl(var(--foreground) / 0.02)),
+    hsl(var(--panel) / 0.16);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.08),
+    0 12px 28px -24px rgba(15, 23, 42, 0.5);
+}
+
+@media (max-width: 1023px) {
+  .auth-form-region::before {
+    display: none;
+  }
+
+  .auth-form-region {
+    background:
+      linear-gradient(180deg, hsl(var(--panel) / 0.08), hsl(var(--muted) / 0.03));
+  }
+}
+
+.appearance-preview {
+  min-height: 260px;
+  background-image:
+    var(--app-bg-image-light),
+    linear-gradient(135deg, hsl(199 76% 92%), hsl(142 44% 93%) 48%, hsl(28 70% 94%));
+  background-position: var(--app-bg-position), center;
+  background-size: cover;
+}
+
+.appearance-preview-dark {
+  background-image:
+    var(--app-bg-image-dark),
+    linear-gradient(135deg, hsl(222 28% 8%), hsl(190 34% 16%) 50%, hsl(28 28% 15%));
+}
+
+.glass-range {
+  display: block;
+  width: 100%;
+  accent-color: hsl(var(--primary));
 }
 
 .app-grid {

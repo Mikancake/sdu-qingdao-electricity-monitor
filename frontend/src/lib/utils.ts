@@ -16,6 +16,17 @@ export function formatKwh(value?: number | string | null) {
   return `${number.toFixed(2)} 度`;
 }
 
+export function formatKwhPerDay(value?: number | string | null) {
+  if (value === null || value === undefined || value === "") {
+    return "--";
+  }
+  const number = Number(value);
+  if (Number.isNaN(number)) {
+    return "--";
+  }
+  return `${number.toFixed(2)} 度/天`;
+}
+
 export function formatDays(value?: number | string | null) {
   if (value === null || value === undefined || value === "") {
     return "--";

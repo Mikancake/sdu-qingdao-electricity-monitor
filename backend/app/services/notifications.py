@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from html import escape
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +37,13 @@ class DailyReportBatchResult:
     failed: int
 
 
+@dataclass(frozen=True)
+class EmailContent:
+    subject: str
+    text_body: str
+    html_body: str
+
+
 def _effective_notify_cooldown_hours(db, binding: UserRoom) -> int:
     runtime = get_runtime_config(db)
     if binding.notify_cooldown_hours is not None:
@@ -69,68 +77,185 @@ def _format_value(value, suffix: str = "") -> str:
     return f"{value}{suffix}"
 
 
-def _build_low_power_email(user: User, binding: UserRoom, stats) -> tuple[str, str]:
+def _format_daily_usage(stats) -> str:
+    if stats.average_daily_usage is None:
+        return "暂无（至少需要 24 小时读数）"
+    return _format_value(stats.average_daily_usage, " 度/天")
+
+
+def _format_days_remaining(stats) -> str:
+    if stats.days_remaining is None:
+        return "暂无（数据不足）"
+    return _format_value(stats.days_remaining, " 天")
+
+
+def _format_threshold(stats) -> str:
+    value = _format_value(stats.alert_threshold, " 度")
+    if stats.alert_threshold is None:
+        return value
+    if stats.alert_threshold_source == "default":
+        return f"{value}（默认估算）"
+    if stats.alert_threshold_source == "fixed":
+        return f"{value}（固定）"
+    return value
+
+
+def _room_location(binding: UserRoom) -> str:
     room = binding.room
-    subject = f"低电量提醒 - {room.building_name} {room.room_number}"
+    return f"{room.campus} {room.building_name} {room.room_number}"
+
+
+def _metric_row(label: str, value: str, accent: str = "#4f46e5") -> str:
+    return f"""
+      <tr>
+        <td style="padding:10px 0;color:#667085;font-size:14px;">{escape(label)}</td>
+        <td style="padding:10px 0;text-align:right;color:#111827;font-size:15px;font-weight:700;">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:{accent};margin-right:8px;vertical-align:middle;"></span>{escape(value)}
+        </td>
+      </tr>
+    """
+
+
+def _room_card(binding: UserRoom, stats, *, readings_available: bool = True) -> str:
+    status_text = "电量偏低" if stats.is_low_power else "状态正常"
+    status_color = "#dc2626" if stats.is_low_power else "#16a34a"
+    status_bg = "#fef2f2" if stats.is_low_power else "#ecfdf3"
+    status_border = "#fecaca" if stats.is_low_power else "#bbf7d0"
+    latest_balance = _format_value(stats.latest_balance, " 度")
+    avg_usage = _format_daily_usage(stats)
+    days_remaining = _format_days_remaining(stats)
+    threshold = _format_threshold(stats)
+    if not readings_available:
+        note = "<p style=\"margin:12px 0 0;color:#98a2b3;font-size:13px;line-height:1.6;\">还没有历史读数，下一次同步后日报会更准确。</p>"
+    elif stats.average_daily_usage_source != "measured":
+        note = "<p style=\"margin:12px 0 0;color:#98a2b3;font-size:13px;line-height:1.6;\">历史读数不足 24 小时，暂不展示实测日均用电；低电量判断会先使用默认日均作为兜底。</p>"
+    else:
+        note = ""
+
+    return f"""
+      <div style="border:1px solid rgba(148,163,184,.28);border-radius:18px;background:rgba(255,255,255,.92);padding:18px;margin:14px 0;box-shadow:0 14px 34px rgba(15,23,42,.08);">
+        <div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;">
+          <div>
+            <div style="font-size:13px;color:#667085;line-height:1.5;">宿舍位置</div>
+            <div style="margin-top:4px;font-size:18px;font-weight:800;color:#111827;line-height:1.35;">{escape(_room_location(binding))}</div>
+          </div>
+          <span style="white-space:nowrap;border:1px solid {status_border};border-radius:999px;background:{status_bg};color:{status_color};padding:6px 10px;font-size:13px;font-weight:700;">{status_text}</span>
+        </div>
+        <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:14px;border-top:1px solid #eef2f7;">
+          {_metric_row("当前剩余电量", latest_balance, status_color)}
+          {_metric_row("预计日均用电", avg_usage, "#0ea5e9")}
+          {_metric_row("预计剩余天数", days_remaining, "#8b5cf6")}
+          {_metric_row("提醒阈值", threshold, "#f59e0b")}
+        </table>
+        {note}
+      </div>
+    """
+
+
+def _email_shell(title: str, subtitle: str, cards_html: str, footer: str) -> str:
+    return f"""<!doctype html>
+<html>
+  <body style="margin:0;background:#eef3fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827;">
+    <div style="max-width:680px;margin:0 auto;padding:32px 16px;">
+      <div style="border-radius:24px;background:linear-gradient(135deg,#111827,#334155);padding:26px 24px;color:#fff;box-shadow:0 18px 50px rgba(15,23,42,.24);">
+        <div style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#cbd5e1;">Electricity Monitor</div>
+        <h1 style="margin:10px 0 8px;font-size:26px;line-height:1.25;">{escape(title)}</h1>
+        <p style="margin:0;color:#dbeafe;line-height:1.7;font-size:14px;">{escape(subtitle)}</p>
+      </div>
+      <div style="margin-top:18px;">{cards_html}</div>
+      <p style="margin:22px 4px 0;color:#667085;font-size:13px;line-height:1.7;">{escape(footer)}</p>
+    </div>
+  </body>
+</html>"""
+
+
+def _build_low_power_email(user: User, binding: UserRoom, stats) -> EmailContent:
+    subject = f"低电量提醒 - {binding.room.building_name} {binding.room.room_number}"
     lines = [
         "Electricity Monitor",
         "",
         "你绑定的宿舍当前电量可能偏低。",
         "",
-        f"📍 位置：{room.campus} {room.building_name} {room.room_number}",
-        f"🔋 当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
-        f"⚡ 预计日均用电：{_format_value(stats.average_daily_usage, ' 度/天')}",
-        f"⏳ 预计剩余天数：{_format_value(stats.days_remaining, ' 天')}",
-        f"🚨 提醒阈值：{_format_value(stats.alert_threshold, ' 度')}",
-        "⚠️ 状态：电量偏低",
+        f"位置：{_room_location(binding)}",
+        f"当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
+        f"预计日均用电：{_format_daily_usage(stats)}",
+        f"预计剩余天数：{_format_days_remaining(stats)}",
+        f"提醒阈值：{_format_threshold(stats)}",
+        "状态：电量偏低",
         "",
         "这封邮件由 Electricity Monitor 自动发送。",
     ]
-    return subject, "\n".join(lines)
+    html_body = _email_shell(
+        "低电量提醒",
+        "你绑定的宿舍电量已经低于当前提醒阈值，建议及时关注。",
+        _room_card(binding, stats),
+        "这封邮件由 Electricity Monitor 自动发送。你可以在设置页调整提醒阈值和通知间隔。",
+    )
+    return EmailContent(subject, "\n".join(lines), html_body)
 
 
-def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom], *, test: bool = False) -> tuple[str, str]:
-    subject_prefix = "测试邮件" if test else "用电日报"
-    subject = f"{subject_prefix} - Electricity Monitor"
+def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom], *, test: bool = False) -> EmailContent:
+    title = "测试邮件" if test else "用电日报"
+    subject = f"{title} - Electricity Monitor"
     lines = [
         "Electricity Monitor",
         "",
         "以下是你绑定宿舍的最新电量信息：",
         "",
     ]
+    cards: list[str] = []
+
     if not bindings:
         lines.extend(["你还没有绑定宿舍。", ""])
+        cards.append(
+            """
+            <div style="border:1px dashed #cbd5e1;border-radius:18px;background:rgba(255,255,255,.9);padding:24px;text-align:center;color:#667085;">
+              你还没有绑定宿舍。
+            </div>
+            """
+        )
+
     for binding in bindings:
         stats, readings = get_room_usage_stats(
             db,
             binding.room_id,
             alert_days=binding.alert_days,
+            alert_threshold_mode=binding.alert_threshold_mode,
             fixed_threshold=binding.low_power_threshold,
         )
-        room = binding.room
         status_text = "电量偏低" if stats.is_low_power else "正常"
-        status_icon = "⚠️" if stats.is_low_power else "✅"
         lines.extend(
             [
-                f"📍 位置：{room.campus} {room.building_name} {room.room_number}",
-                f"🔋 当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
-                f"⚡ 预计日均用电：{_format_value(stats.average_daily_usage, ' 度/天')}",
-                f"⏳ 预计剩余天数：{_format_value(stats.days_remaining, ' 天')}",
-                f"🚨 提醒阈值：{_format_value(stats.alert_threshold, ' 度')}",
-                f"{status_icon} 状态：{status_text}",
+                f"位置：{_room_location(binding)}",
+                f"当前剩余电量：{_format_value(stats.latest_balance, ' 度')}",
+                f"预计日均用电：{_format_daily_usage(stats)}",
+                f"预计剩余天数：{_format_days_remaining(stats)}",
+                f"提醒阈值：{_format_threshold(stats)}",
+                f"状态：{status_text}",
                 "",
             ]
         )
         if not readings:
-            lines.append("  还没有历史读数，worker 下一次同步后会更准确。")
-            lines.append("")
+            lines.extend(["还没有历史读数，下一次同步后日报会更准确。", ""])
+        elif stats.average_daily_usage_source != "measured":
+            lines.extend(["历史读数不足 24 小时，暂不展示实测日均用电。", ""])
+        cards.append(_room_card(binding, stats, readings_available=bool(readings)))
+
     if test:
         lines.append("这是一封测试邮件，用于确认提醒邮箱可以正常接收 Electricity Monitor 邮件。")
+        subtitle = "这是一封测试邮件，用于确认你的提醒邮箱可以正常接收通知。"
     else:
         lines.append("这是一封自动发送的用电日报。你可以在设置页关闭日报或调整发送间隔。")
-    lines.append("")
-    lines.append("Electricity Monitor")
-    return subject, "\n".join(lines)
+        subtitle = "以下是你绑定宿舍的最新电量信息。"
+    lines.extend(["", "Electricity Monitor"])
+
+    html_body = _email_shell(
+        title,
+        subtitle,
+        "".join(cards),
+        "你可以在 Electricity Monitor 的设置页调整日报、低电量提醒阈值和通知间隔。",
+    )
+    return EmailContent(subject, "\n".join(lines), html_body)
 
 
 def send_test_email_for_user(db: Session, user: User) -> EmailSendResult:
@@ -142,8 +267,8 @@ def send_test_email_for_user(db: Session, user: User) -> EmailSendResult:
             .order_by(UserRoom.id)
         )
     )
-    subject, body = _build_power_report_email(db, user, bindings, test=True)
-    return send_email(user.notification_recipient_email, subject, body)
+    content = _build_power_report_email(db, user, bindings, test=True)
+    return send_email(user.notification_recipient_email, content.subject, content.text_body, html_body=content.html_body)
 
 
 def _daily_report_due(user: User, now: datetime) -> bool:
@@ -174,8 +299,8 @@ def run_daily_reports() -> DailyReportBatchResult:
                     .order_by(UserRoom.id)
                 )
             )
-            subject, body = _build_power_report_email(db, user, bindings, test=False)
-            result = send_email(user.notification_recipient_email, subject, body)
+            content = _build_power_report_email(db, user, bindings, test=False)
+            result = send_email(user.notification_recipient_email, content.subject, content.text_body, html_body=content.html_body)
             if result.ok:
                 user.daily_report_last_sent_at = datetime.now()
                 sent += 1
@@ -213,6 +338,7 @@ def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatc
                 db,
                 binding.room_id,
                 alert_days=binding.alert_days,
+                alert_threshold_mode=binding.alert_threshold_mode,
                 fixed_threshold=binding.low_power_threshold,
             )
             if not readings or not stats.is_low_power:
@@ -220,7 +346,7 @@ def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatc
                 continue
 
             recipient_email = user.notification_recipient_email
-            subject, body = _build_low_power_email(user, binding, stats)
+            content = _build_low_power_email(user, binding, stats)
             latest_reading = readings[-1]
             notification = Notification(
                 user_id=user.id,
@@ -230,13 +356,13 @@ def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatc
                 kind="low_power",
                 status="pending",
                 recipient_email=recipient_email,
-                subject=subject,
-                body=body,
+                subject=content.subject,
+                body=content.text_body,
             )
             db.add(notification)
             db.flush()
 
-            result = send_email(recipient_email, subject, body)
+            result = send_email(recipient_email, content.subject, content.text_body, html_body=content.html_body)
             if result.ok:
                 notification.status = "sent"
                 notification.sent_at = datetime.now()

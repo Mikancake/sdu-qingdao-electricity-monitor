@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -14,7 +14,8 @@ class UserRoom(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     room_id: Mapped[int] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
-    alert_days: Mapped[int] = mapped_column(Integer, default=3)
+    alert_days: Mapped[int] = mapped_column(Integer, default=1)
+    alert_threshold_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     low_power_threshold: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     manual_check_cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notify_cooldown_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)

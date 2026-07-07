@@ -74,8 +74,12 @@ export interface UsageStats {
   latest_balance?: string | null;
   latest_read_at?: string | null;
   average_daily_usage?: string | null;
+  average_daily_usage_source?: "measured" | "insufficient" | "unknown" | string;
+  usage_window_hours?: string | null;
   days_remaining?: string | null;
+  days_remaining_source?: "measured" | "default" | "unknown" | string;
   alert_threshold?: string | null;
+  alert_threshold_source?: "fixed" | "measured" | "default" | "unknown" | string;
   is_low_power: boolean;
   status: "unknown" | "low" | "ok" | string;
 }
@@ -84,6 +88,7 @@ export interface UserRoomSummary {
   binding_id: number;
   room: Room;
   alert_days: number;
+  alert_threshold_mode?: "days" | "average" | "fixed" | null;
   low_power_threshold?: string | null;
   enabled: boolean;
   manual_check_available_at?: string | null;
@@ -95,6 +100,7 @@ export interface UserRoomBinding {
   id: number;
   room_id: number;
   alert_days: number;
+  alert_threshold_mode?: "days" | "average" | "fixed" | null;
   low_power_threshold?: string | null;
   manual_check_cooldown_seconds?: number | null;
   notify_cooldown_hours?: number | null;
@@ -140,6 +146,19 @@ export interface SmtpSettings {
   updated_at?: string | null;
 }
 
+export interface AppearanceSettings {
+  background_image_url?: string | null;
+  light_background_image_url?: string | null;
+  dark_background_image_url?: string | null;
+  background_position: "top" | "center" | "bottom";
+  background_overlay_opacity: number;
+  background_blur_px: number;
+  glass_card_opacity: number;
+  glass_blur_px: number;
+  glass_effect_mode: "lite" | "frosted" | "liquid";
+  updated_at?: string | null;
+}
+
 export interface RuntimeSettings {
   check_interval_seconds: number;
   check_batch_size: number;
@@ -151,11 +170,29 @@ export interface RuntimeSettings {
   usage_history_days: number;
   manual_check_cooldown_seconds: number;
   worker_idle_seconds: number;
+  max_rooms_per_user: number;
+  verification_code_retention_days: number;
+  check_attempt_retention_days: number;
+  notification_retention_days: number;
+  electricity_reading_retention_days: number;
+  admin_audit_log_retention_days: number;
+  retention_cleanup_hour: number;
+  appearance?: AppearanceSettings | null;
+}
+
+export interface DataRetentionCleanupResult {
+  verification_codes_deleted: number;
+  check_attempts_deleted: number;
+  notifications_deleted: number;
+  electricity_readings_deleted: number;
+  admin_audit_logs_deleted: number;
+  total_deleted: number;
 }
 
 export interface RuntimeLimits {
   manual_check_cooldown_seconds: number;
   notify_cooldown_hours: number;
+  max_rooms_per_user: number;
 }
 
 export interface AdminStatus {

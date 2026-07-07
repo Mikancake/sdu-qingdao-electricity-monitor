@@ -6,7 +6,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return (
     <input
       className={cn(
-        "h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none",
+        "h-9 w-full rounded-md border border-border/75 bg-panel/70 px-3 text-sm text-foreground shadow-sm outline-none",
         "placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15",
         className
       )}
@@ -19,7 +19,7 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   return (
     <select
       className={cn(
-        "h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none",
+        "h-9 w-full rounded-md border border-border/75 bg-panel/70 px-3 text-sm text-foreground shadow-sm outline-none",
         "focus:border-primary focus:ring-2 focus:ring-primary/15",
         className
       )}

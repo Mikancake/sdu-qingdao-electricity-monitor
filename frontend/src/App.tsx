@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, createApiClient } from "./lib/api";
+import { ApiError, createApiClient, getApiErrorMessage } from "./lib/api";
 import type { UserRoomBinding } from "./lib/types";
 import { AdminApp } from "./components/AdminApp";
 import { AuthPanel } from "./components/AuthPanel";
 import { AppShell, type ViewKey } from "./components/AppShell";
 import { DashboardView, type ChartRangeState } from "./components/DashboardView";
+import { NoticeDialog } from "./components/NoticeDialog";
 import { RecordsView } from "./components/RecordsView";
 import { RoomsView } from "./components/RoomsView";
 import { SettingsView } from "./components/SettingsView";
@@ -54,7 +55,7 @@ function describeError(error: unknown) {
       const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 1800;
       return `邮件发送冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
     }
-    return JSON.stringify(error.detail);
+    return getApiErrorMessage(error);
   }
   if (error instanceof Error) {
     return error.message;
@@ -183,7 +184,7 @@ export default function App() {
   const bindMutation = useMutation({
     mutationFn: api.bindRoom,
     onSuccess: () => {
-      setNotice("宿舍已绑定。");
+      setNotice("宿舍已绑定，并已保存本次电量读数。");
       void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
       void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
     },
@@ -316,14 +317,7 @@ export default function App() {
       onRefresh={refreshAll}
       onToggleTheme={() => setDarkMode((value) => !value)}
     >
-      {notice ? (
-        <div className="mb-4 flex items-center justify-between rounded-lg border border-border bg-panel px-4 py-3 text-sm shadow-soft">
-          <span className="text-muted-foreground">{notice}</span>
-          <button className="text-xs text-primary" onClick={() => setNotice(null)} type="button">
-            关闭
-          </button>
-        </div>
-      ) : null}
+      <NoticeDialog message={notice} onClose={() => setNotice(null)} />
 
       {activeView === "dashboard" ? (
         <DashboardView

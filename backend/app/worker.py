@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from app.db.schema import create_schema
 from app.db.session import SessionLocal, engine
+from app.services.data_retention import run_data_retention_cleanup
 from app.services.notifications import run_daily_reports, run_low_power_notifications
 from app.services.room_checks import run_room_checks
 from app.services.runtime_settings import get_runtime_config
@@ -53,8 +54,14 @@ def main() -> int:
     next_check_at = next_aligned_time(datetime.now(), runtime.check_interval_seconds)
     next_notify_at = datetime.now()
     next_daily_report_at = next_daily_time(datetime.now(), hour=8)
+    next_cleanup_at = next_daily_time(datetime.now(), hour=runtime.retention_cleanup_hour)
 
-    logger.info("worker started; next_check_at=%s next_daily_report_at=%s", next_check_at, next_daily_report_at)
+    logger.info(
+        "worker started; next_check_at=%s next_daily_report_at=%s next_cleanup_at=%s",
+        next_check_at,
+        next_daily_report_at,
+        next_cleanup_at,
+    )
     while not state.stopping:
         with SessionLocal() as db:
             runtime = get_runtime_config(db)
@@ -95,6 +102,19 @@ def main() -> int:
                 result.failed,
             )
             next_daily_report_at = next_daily_time(datetime.now(), hour=8)
+
+        if now >= next_cleanup_at:
+            result = run_data_retention_cleanup()
+            logger.info(
+                "data retention cleanup: verification_codes=%s check_attempts=%s notifications=%s readings=%s audit_logs=%s total=%s",
+                result.verification_codes_deleted,
+                result.check_attempts_deleted,
+                result.notifications_deleted,
+                result.electricity_readings_deleted,
+                result.admin_audit_logs_deleted,
+                result.total_deleted,
+            )
+            next_cleanup_at = next_daily_time(datetime.now(), hour=runtime.retention_cleanup_hour)
 
         time.sleep(runtime.worker_idle_seconds)
 

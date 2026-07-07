@@ -11,8 +11,12 @@ class UsageStatsOut(BaseModel):
     latest_balance: Decimal | None
     latest_read_at: datetime | None
     average_daily_usage: Decimal | None
+    average_daily_usage_source: str
+    usage_window_hours: Decimal | None
     days_remaining: Decimal | None
+    days_remaining_source: str
     alert_threshold: Decimal | None
+    alert_threshold_source: str
     is_low_power: bool
     status: str
 
@@ -21,6 +25,7 @@ class UserRoomDashboardOut(BaseModel):
     binding_id: int
     room: RoomOut
     alert_days: int
+    alert_threshold_mode: str | None = "days"
     low_power_threshold: Decimal | None
     enabled: bool
     manual_check_available_at: datetime | None = None

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, BatteryCharging, Building2, Clock, Loader2, RefreshCcw, Zap } from "lucide-react";
 
 import type { Reading, UserRoomSummary } from "../lib/types";
-import { formatDateTime, formatDays, formatKwh } from "../lib/utils";
+import { formatDateTime, formatDays, formatKwh, formatKwhPerDay } from "../lib/utils";
 import { EmptyState } from "./EmptyState";
 import { PowerChart } from "./PowerChart";
 import { Badge } from "./ui/badge";
@@ -43,9 +43,80 @@ function cooldownSecondsUntil(value?: string | null, now = Date.now()) {
   return Math.max(0, Math.ceil((new Date(value).getTime() - now) / 1000));
 }
 
+function hasMeasuredAverage(item: UserRoomSummary) {
+  return item.usage.average_daily_usage_source === "measured" && Boolean(item.usage.average_daily_usage);
+}
+
+function formatUsageWindow(hours?: string | null) {
+  if (!hours) {
+    return "历史读数";
+  }
+  const value = Number(hours);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "历史读数";
+  }
+  const days = value / 24;
+  return days < 2 ? `${days.toFixed(1)} 天读数` : `${Math.round(days)} 天读数`;
+}
+
+function defaultDailyUsage(item: UserRoomSummary) {
+  const threshold = Number(item.usage.alert_threshold);
+  if (Number.isFinite(threshold) && threshold > 0) {
+    if ((item.alert_threshold_mode ?? "days") === "days" && item.alert_days > 0) {
+      return threshold / item.alert_days;
+    }
+    if ((item.alert_threshold_mode ?? "days") === "average") {
+      return threshold;
+    }
+  }
+  return 5;
+}
+
+function dailyUsageBasis(item: UserRoomSummary) {
+  if (hasMeasuredAverage(item)) {
+    return `实测日均 ${formatKwhPerDay(item.usage.average_daily_usage)}`;
+  }
+  return `默认 ${formatKwhPerDay(defaultDailyUsage(item))}`;
+}
+
+function usageAverageHint(item: UserRoomSummary) {
+  if (hasMeasuredAverage(item)) {
+    return `基于${formatUsageWindow(item.usage.usage_window_hours)}计算`;
+  }
+  if (item.usage.latest_read_at) {
+    return "读数不足 24 小时，暂不显示实测日均";
+  }
+  return "暂无历史读数";
+}
+
+function remainingHint(item: UserRoomSummary) {
+  if (!item.usage.latest_balance) {
+    return "暂无当前电量";
+  }
+  if (item.usage.days_remaining_source === "measured") {
+    return "基于最近实测日均用电估算";
+  }
+  return `基于${dailyUsageBasis(item)}估算，读数满 24 小时后改用实测`;
+}
+
+function thresholdHint(item: UserRoomSummary) {
+  const value = formatKwh(item.usage.alert_threshold);
+  const mode = item.alert_threshold_mode ?? "days";
+  if (value === "--") {
+    return "暂无提醒阈值";
+  }
+  if (mode === "fixed") {
+    return `固定阈值：电量低于 ${value} 时提醒`;
+  }
+  if (mode === "average") {
+    return `提醒阈值：低于 1 天用电量时提醒（${dailyUsageBasis(item)} = ${value}）`;
+  }
+  return `提醒阈值：${item.alert_days} 天 × ${dailyUsageBasis(item)} = ${value}`;
+}
+
 const chartRangeItems: Array<{ key: ChartRangeKey; label: string }> = [
-  { key: "1d", label: "1天" },
-  { key: "7d", label: "7天" },
+  { key: "1d", label: "1 天" },
+  { key: "7d", label: "7 天" },
   { key: "30d", label: "近一月" },
   { key: "all", label: "有史以来" },
   { key: "custom", label: "自定义" }
@@ -100,9 +171,9 @@ export function DashboardView({
 
   return (
     <div className="space-y-5">
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardContent className="flex items-center justify-between">
+      <section className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card className="min-h-[148px]">
+          <CardContent className="flex h-full items-center justify-between">
             <div>
               <div className="text-xs text-muted-foreground">当前电量</div>
               <div className="mt-2 text-2xl font-semibold">{formatKwh(primary.usage.latest_balance)}</div>
@@ -112,30 +183,31 @@ export function DashboardView({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="flex items-center justify-between">
+        <Card className="min-h-[148px]">
+          <CardContent className="flex h-full items-center justify-between gap-4">
             <div>
               <div className="text-xs text-muted-foreground">预计剩余</div>
               <div className="mt-2 text-2xl font-semibold">{formatDays(primary.usage.days_remaining)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">基于最近用电估算</div>
+              <div className="mt-1 max-w-[210px] text-xs leading-5 text-muted-foreground">{remainingHint(primary)}</div>
             </div>
-            <Clock className="text-success" size={28} />
+            <Clock className="shrink-0 text-success" size={28} />
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="flex items-center justify-between">
+        <Card className="min-h-[148px]">
+          <CardContent className="flex h-full items-center justify-between gap-4">
             <div>
               <div className="text-xs text-muted-foreground">日均用电</div>
-              <div className="mt-2 text-2xl font-semibold">{formatKwh(primary.usage.average_daily_usage)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">阈值 {formatKwh(primary.usage.alert_threshold)}</div>
+              <div className="mt-2 text-2xl font-semibold">{formatKwhPerDay(primary.usage.average_daily_usage)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{usageAverageHint(primary)}</div>
+              <div className="mt-1 max-w-[240px] text-xs leading-5 text-muted-foreground">{thresholdHint(primary)}</div>
             </div>
-            <Zap className="text-warning" size={28} />
+            <Zap className="shrink-0 text-warning" size={28} />
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="flex items-center justify-between">
+        <Card className="min-h-[148px]">
+          <CardContent className="flex h-full items-center justify-between">
             <div>
               <div className="text-xs text-muted-foreground">绑定宿舍</div>
               <div className="mt-2 text-2xl font-semibold">{enabledCount}</div>
@@ -150,8 +222,10 @@ export function DashboardView({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle>{primary.room.building_name} {primary.room.room_number}</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">按查询时间点连接的电量变化</p>
+              <CardTitle>
+                {primary.room.building_name} {primary.room.room_number}
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">每一次查询都会成为一个点，曲线按查询时间连接。</p>
             </div>
             <Button
               size="sm"
@@ -240,7 +314,7 @@ export function DashboardView({
           </CardHeader>
           <CardContent className="space-y-3">
             {summaries.map((item) => (
-              <div key={item.binding_id} className="rounded-lg border border-border p-3">
+              <div key={item.binding_id} className="glass-tile rounded-lg border border-border/70 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">
@@ -253,13 +327,16 @@ export function DashboardView({
                   </Badge>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md bg-muted px-2 py-2">
+                  <div className="rounded-md bg-muted/55 px-2 py-2">
                     <div className="text-muted-foreground">余额</div>
                     <div className="mt-1 font-medium">{formatKwh(item.usage.latest_balance)}</div>
                   </div>
-                  <div className="rounded-md bg-muted px-2 py-2">
+                  <div className="rounded-md bg-muted/55 px-2 py-2">
                     <div className="text-muted-foreground">剩余</div>
                     <div className="mt-1 font-medium">{formatDays(item.usage.days_remaining)}</div>
+                    {item.usage.days_remaining_source === "default" ? (
+                      <div className="mt-1 text-[11px] text-muted-foreground">默认估算</div>
+                    ) : null}
                   </div>
                 </div>
               </div>
