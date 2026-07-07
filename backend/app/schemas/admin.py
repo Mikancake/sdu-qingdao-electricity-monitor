@@ -59,33 +59,106 @@ class AdminAuthTokenOut(BaseModel):
     enabled: bool
     min_interval_seconds: int
     last_used_at: datetime | None
+    health_status: str = "unknown"
+    failure_count: int = 0
+    last_checked_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_kind: str | None = None
+    last_error_msg: str | None = None
     created_at: datetime
 
 
+class AdminTokenHealthTestRequest(BaseModel):
+    room_id: int | None = None
+
+
+class AdminHealthTestOut(BaseModel):
+    success: bool
+    error_kind: str | None = None
+    error_msg: str | None = None
+
+
+class AdminAuthTokenHealthLogOut(BaseModel):
+    id: int
+    token_id: int | None
+    token_name: str | None
+    source: str
+    success: bool
+    error_kind: str | None
+    error_msg: str | None
+    health_status: str
+    failure_count: int
+    created_at: datetime
+
+
+class SmtpSettingsCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=465, ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=512)
+    from_email: str = Field(min_length=3, max_length=255)
+    enabled: bool = True
+    min_interval_seconds: int = Field(default=0, ge=0, le=3600)
+    use_ssl: bool = True
+    use_starttls: bool = False
+
+
 class SmtpSettingsUpdate(BaseModel):
-    host: str | None = Field(default=None, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    host: str | None = Field(default=None, min_length=1, max_length=255)
     port: int | None = Field(default=None, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=512)
-    from_email: str | None = Field(default=None, max_length=255)
+    from_email: str | None = Field(default=None, min_length=3, max_length=255)
+    enabled: bool | None = None
+    min_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     use_ssl: bool | None = None
     use_starttls: bool | None = None
 
 
 class SmtpSettingsOut(BaseModel):
+    id: int
+    name: str
     configured: bool
     host: str | None
     port: int
     username: str | None
     from_email: str | None
+    enabled: bool
+    min_interval_seconds: int
     use_ssl: bool
     use_starttls: bool
     password_configured: bool
+    last_used_at: datetime | None = None
+    health_status: str = "unknown"
+    failure_count: int = 0
+    last_checked_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_kind: str | None = None
+    last_error_msg: str | None = None
+    created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 class SmtpTestRequest(BaseModel):
     to_email: str = Field(min_length=3, max_length=255)
+
+
+class SmtpHealthLogOut(BaseModel):
+    id: int
+    smtp_id: int | None
+    smtp_name: str | None
+    source: str
+    recipient_email: str | None
+    success: bool
+    error_kind: str | None
+    error_msg: str | None
+    health_status: str
+    failure_count: int
+    created_at: datetime
 
 
 class RuntimeSettingsOut(BaseModel):
@@ -150,9 +223,19 @@ class RateLimitClearOut(BaseModel):
 class AdminStatusOut(BaseModel):
     token_count: int
     enabled_token_count: int
+    unhealthy_token_count: int
+    smtp_count: int
+    enabled_smtp_count: int
+    unhealthy_smtp_count: int
     smtp_configured: bool
     pending_notifications: int
     failed_notifications: int
+    sent_notifications: int
+    total_notifications: int
+    recent_sent_notifications: int
+    recent_failed_notifications: int
+    active_bindings: int
+    verified_users: int
     total_rooms: int
     total_users: int
     latest_read_at: datetime | None

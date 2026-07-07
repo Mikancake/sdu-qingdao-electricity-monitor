@@ -14,6 +14,7 @@ from app.models.room import Room
 from app.models.user import User
 from app.models.user_room import UserRoom
 from app.services.runtime_settings import get_runtime_config
+from app.services.token_health import record_token_health
 from app.services.token_pool import select_available_token
 
 
@@ -70,6 +71,14 @@ def check_and_store_room(
     attempt.auth_token_id = token.id
     result = CampusElectricityClient(token.token_value).query_room(room)
     token.last_used_at = datetime.now()
+    record_token_health(
+        db,
+        token,
+        success=result.success and result.balance is not None,
+        source=source,
+        error_kind=result.error_kind,
+        error_msg=result.error_msg,
+    )
     if not result.success or result.balance is None:
         attempt.error_kind = result.error_kind
         attempt.error_msg = result.error_msg

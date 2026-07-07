@@ -108,9 +108,11 @@ def _room_location(binding: UserRoom) -> str:
 def _metric_row(label: str, value: str, accent: str = "#4f46e5") -> str:
     return f"""
       <tr>
-        <td style="padding:10px 0;color:#667085;font-size:14px;">{escape(label)}</td>
-        <td style="padding:10px 0;text-align:right;color:#111827;font-size:15px;font-weight:700;">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:{accent};margin-right:8px;vertical-align:middle;"></span>{escape(value)}
+        <td style="padding:13px 0;border-top:1px solid #e8edf5;">
+          <div style="color:#667085;font-size:13px;line-height:1.45;">{escape(label)}</div>
+          <div style="margin-top:5px;color:#101828;font-size:18px;font-weight:800;line-height:1.45;">
+            <span style="display:inline-block;width:9px;height:9px;border-radius:999px;background:{accent};margin-right:8px;vertical-align:middle;"></span>{escape(value)}
+          </div>
         </td>
       </tr>
     """
@@ -126,45 +128,91 @@ def _room_card(binding: UserRoom, stats, *, readings_available: bool = True) -> 
     days_remaining = _format_days_remaining(stats)
     threshold = _format_threshold(stats)
     if not readings_available:
-        note = "<p style=\"margin:12px 0 0;color:#98a2b3;font-size:13px;line-height:1.6;\">还没有历史读数，下一次同步后日报会更准确。</p>"
+        note = """
+          <tr>
+            <td style="padding:14px 0 0;">
+              <div style="border-radius:12px;background:#f8fafc;border:1px solid #e8edf5;padding:11px 12px;color:#667085;font-size:13px;line-height:1.7;">
+                还没有历史读数，下一次同步后日报会更准确。
+              </div>
+            </td>
+          </tr>
+        """
     elif stats.average_daily_usage_source != "measured":
-        note = "<p style=\"margin:12px 0 0;color:#98a2b3;font-size:13px;line-height:1.6;\">历史读数不足 24 小时，暂不展示实测日均用电；低电量判断会先使用默认日均作为兜底。</p>"
+        note = """
+          <tr>
+            <td style="padding:14px 0 0;">
+              <div style="border-radius:12px;background:#f8fafc;border:1px solid #e8edf5;padding:11px 12px;color:#667085;font-size:13px;line-height:1.7;">
+                历史读数不足 24 小时，暂不展示实测日均用电；低电量判断会先使用默认日均作为兜底。
+              </div>
+            </td>
+          </tr>
+        """
     else:
         note = ""
 
     return f"""
-      <div style="border:1px solid rgba(148,163,184,.28);border-radius:18px;background:rgba(255,255,255,.92);padding:18px;margin:14px 0;box-shadow:0 14px 34px rgba(15,23,42,.08);">
-        <div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;">
-          <div>
-            <div style="font-size:13px;color:#667085;line-height:1.5;">宿舍位置</div>
-            <div style="margin-top:4px;font-size:18px;font-weight:800;color:#111827;line-height:1.35;">{escape(_room_location(binding))}</div>
-          </div>
-          <span style="white-space:nowrap;border:1px solid {status_border};border-radius:999px;background:{status_bg};color:{status_color};padding:6px 10px;font-size:13px;font-weight:700;">{status_text}</span>
-        </div>
-        <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:14px;border-top:1px solid #eef2f7;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;margin:14px 0;border:1px solid #dfe7f1;border-left:4px solid {status_color};border-radius:16px;background:#ffffff;box-shadow:0 10px 26px rgba(15,23,42,.07);">
+        <tr>
+          <td style="padding:18px 18px 4px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;">
+              <tr>
+                <td style="vertical-align:top;padding:0 12px 0 0;">
+                  <div style="font-size:13px;color:#667085;line-height:1.5;">宿舍位置</div>
+                  <div style="margin-top:4px;font-size:19px;font-weight:800;color:#101828;line-height:1.35;">{escape(_room_location(binding))}</div>
+                </td>
+                <td align="right" style="vertical-align:top;width:1%;white-space:nowrap;padding:0;">
+                  <span style="display:inline-block;border:1px solid {status_border};border-radius:999px;background:{status_bg};color:{status_color};padding:7px 11px;font-size:13px;font-weight:800;line-height:1;">{status_text}</span>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 18px 18px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-top:10px;">
           {_metric_row("当前剩余电量", latest_balance, status_color)}
           {_metric_row("预计日均用电", avg_usage, "#0ea5e9")}
           {_metric_row("预计剩余天数", days_remaining, "#8b5cf6")}
           {_metric_row("提醒阈值", threshold, "#f59e0b")}
-        </table>
-        {note}
-      </div>
+          {note}
+            </table>
+          </td>
+        </tr>
+      </table>
     """
 
 
 def _email_shell(title: str, subtitle: str, cards_html: str, footer: str) -> str:
     return f"""<!doctype html>
 <html>
-  <body style="margin:0;background:#eef3fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827;">
-    <div style="max-width:680px;margin:0 auto;padding:32px 16px;">
-      <div style="border-radius:24px;background:linear-gradient(135deg,#111827,#334155);padding:26px 24px;color:#fff;box-shadow:0 18px 50px rgba(15,23,42,.24);">
-        <div style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#cbd5e1;">Electricity Monitor</div>
-        <h1 style="margin:10px 0 8px;font-size:26px;line-height:1.25;">{escape(title)}</h1>
-        <p style="margin:0;color:#dbeafe;line-height:1.7;font-size:14px;">{escape(subtitle)}</p>
-      </div>
-      <div style="margin-top:18px;">{cards_html}</div>
-      <p style="margin:22px 4px 0;color:#667085;font-size:13px;line-height:1.7;">{escape(footer)}</p>
-    </div>
+  <body style="margin:0;padding:0;background:#f3f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#101828;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{escape(title)} - {escape(subtitle)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#f3f6fb" style="width:100%;border-collapse:collapse;background:#f3f6fb;">
+      <tr>
+        <td align="center" style="padding:28px 12px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;border-collapse:separate;border-spacing:0;background:#ffffff;border:1px solid #dfe7f1;border-radius:20px;overflow:hidden;box-shadow:0 18px 42px rgba(15,23,42,.08);">
+            <tr>
+              <td bgcolor="#2563eb" style="height:7px;line-height:7px;font-size:0;background:#2563eb;">&nbsp;</td>
+            </tr>
+            <tr>
+              <td style="padding:24px 22px 18px;background:#ffffff;">
+                <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#2563eb;font-weight:800;line-height:1.4;">Electricity Monitor</div>
+                <h1 style="margin:10px 0 8px;font-size:25px;line-height:1.28;color:#101828;font-weight:850;">{escape(title)}</h1>
+                <p style="margin:0;color:#475467;line-height:1.75;font-size:14px;">{escape(subtitle)}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 16px 8px;background:#ffffff;">{cards_html}</td>
+            </tr>
+            <tr>
+              <td style="padding:2px 22px 24px;background:#ffffff;">
+                <div style="border-top:1px solid #e8edf5;padding-top:14px;color:#667085;font-size:13px;line-height:1.7;">{escape(footer)}</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>"""
 

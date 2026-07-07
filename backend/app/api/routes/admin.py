@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -13,22 +13,28 @@ from app.api.deps import current_admin, db_session
 from app.core.config import settings
 from app.api.routes.auth import ensure_email_shape, normalize_email
 from app.core.security import hash_password, sign_access_token, verify_password
+from app.electricity.client import CampusElectricityClient
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_user import AdminUser
 from app.models.auth_token import AuthToken
+from app.models.auth_token_health_log import AuthTokenHealthLog
 from app.models.electricity_reading import ElectricityReading
 from app.models.notification import Notification
 from app.models.room import Room
+from app.models.smtp_health_log import SmtpHealthLog
 from app.models.smtp_settings import SmtpSettings
 from app.models.user import User
 from app.models.user_room import UserRoom
 from app.schemas.admin import (
     AdminAuthTokenCreate,
+    AdminAuthTokenHealthLogOut,
     AdminAuthTokenOut,
     AdminAuthTokenUpdate,
+    AdminHealthTestOut,
     AdminRoomBindingOut,
     AdminRoomOut,
     AdminAuditLogOut,
+    AdminTokenHealthTestRequest,
     AdminLogin,
     AdminManagedUserDetailOut,
     AdminManagedUserOut,
@@ -44,6 +50,8 @@ from app.schemas.admin import (
     RateLimitClearRequest,
     RuntimeSettingsOut,
     RuntimeSettingsUpdate,
+    SmtpHealthLogOut,
+    SmtpSettingsCreate,
     SmtpSettingsOut,
     SmtpSettingsUpdate,
     SmtpTestRequest,
@@ -53,11 +61,12 @@ from app.schemas.binding import UserRoomOut
 from app.services.admins import normalize_username
 from app.services.appearance import get_appearance_settings, update_appearance_settings
 from app.services.data_retention import cleanup_data_retention
-from app.services.emailer import load_smtp_config, send_email
+from app.services.emailer import send_email, smtp_configured
 from app.services.notifications import run_low_power_notifications
 from app.services.rate_limit import enforce_rate_limit, limiter, rate_limit_key
 from app.services.room_checks import run_room_checks
 from app.services.runtime_settings import get_runtime_config, update_runtime_config
+from app.services.token_health import record_token_health
 from app.services.users import delete_user_account
 
 
@@ -96,33 +105,40 @@ def _token_out(token: AuthToken) -> AdminAuthTokenOut:
         enabled=token.enabled,
         min_interval_seconds=token.min_interval_seconds,
         last_used_at=token.last_used_at,
+        health_status=token.health_status or "unknown",
+        failure_count=token.failure_count or 0,
+        last_checked_at=token.last_checked_at,
+        last_success_at=token.last_success_at,
+        last_error_at=token.last_error_at,
+        last_error_kind=token.last_error_kind,
+        last_error_msg=token.last_error_msg,
         created_at=token.created_at,
     )
 
 
-def _smtp_out(row: SmtpSettings | None = None) -> SmtpSettingsOut:
-    if row is None:
-        config = load_smtp_config()
-        return SmtpSettingsOut(
-            configured=config.configured,
-            host=config.host,
-            port=config.port,
-            username=config.username,
-            from_email=config.from_email,
-            use_ssl=config.use_ssl,
-            use_starttls=config.use_starttls,
-            password_configured=bool(config.password),
-            updated_at=None,
-        )
+def _smtp_out(row: SmtpSettings) -> SmtpSettingsOut:
     return SmtpSettingsOut(
+        id=row.id,
+        name=row.name or f"smtp-{row.id}",
         configured=bool(row.host and row.from_email),
         host=row.host,
         port=row.port,
         username=row.username,
         from_email=row.from_email,
+        enabled=row.enabled,
+        min_interval_seconds=row.min_interval_seconds or 0,
         use_ssl=row.use_ssl,
         use_starttls=row.use_starttls,
         password_configured=bool(row.password),
+        last_used_at=row.last_used_at,
+        health_status=row.health_status or "unknown",
+        failure_count=row.failure_count or 0,
+        last_checked_at=row.last_checked_at,
+        last_success_at=row.last_success_at,
+        last_error_at=row.last_error_at,
+        last_error_kind=row.last_error_kind,
+        last_error_msg=row.last_error_msg,
+        created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
@@ -367,6 +383,17 @@ def delete_user_room_binding(
     db.commit()
 
 
+def _first_test_room(db: Session, room_id: int | None = None) -> Room:
+    room = db.get(Room, room_id) if room_id is not None else None
+    if room is None and room_id is not None:
+        raise HTTPException(status_code=404, detail="room not found")
+    if room is None:
+        room = db.scalar(select(Room).order_by(Room.id).limit(1))
+    if room is None:
+        raise HTTPException(status_code=400, detail="no room can be used for token test")
+    return room
+
+
 @router.get("/tokens", response_model=list[AdminAuthTokenOut])
 def list_tokens(
     _: AdminUser = Depends(current_admin),
@@ -374,6 +401,36 @@ def list_tokens(
 ) -> list[AdminAuthTokenOut]:
     tokens = db.scalars(select(AuthToken).order_by(AuthToken.id))
     return [_token_out(token) for token in tokens]
+
+
+@router.get("/tokens/health-logs", response_model=list[AdminAuthTokenHealthLogOut])
+def list_token_health_logs(
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> list[AdminAuthTokenHealthLogOut]:
+    rows = list(
+        db.execute(
+            select(AuthTokenHealthLog, AuthToken)
+            .outerjoin(AuthToken, AuthToken.id == AuthTokenHealthLog.auth_token_id)
+            .order_by(AuthTokenHealthLog.created_at.desc(), AuthTokenHealthLog.id.desc())
+            .limit(200)
+        ).all()
+    )
+    return [
+        AdminAuthTokenHealthLogOut(
+            id=log.id,
+            token_id=log.auth_token_id,
+            token_name=token.name if token else None,
+            source=log.source,
+            success=log.success,
+            error_kind=log.error_kind,
+            error_msg=log.error_msg,
+            health_status=log.health_status,
+            failure_count=log.failure_count,
+            created_at=log.created_at,
+        )
+        for log, token in rows
+    ]
 
 
 @router.post("/tokens", response_model=AdminAuthTokenOut, status_code=status.HTTP_201_CREATED)
@@ -435,6 +492,39 @@ def update_token(
     return _token_out(token)
 
 
+@router.post("/tokens/{token_id}/test", response_model=AdminHealthTestOut)
+def test_token(
+    token_id: int,
+    payload: AdminTokenHealthTestRequest,
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> AdminHealthTestOut:
+    token = db.get(AuthToken, token_id)
+    if token is None:
+        raise HTTPException(status_code=404, detail="token not found")
+    room = _first_test_room(db, payload.room_id)
+    result = CampusElectricityClient(token.token_value).query_room(room)
+    token.last_used_at = datetime.now()
+    record_token_health(
+        db,
+        token,
+        success=result.success and result.balance is not None,
+        source="admin_test",
+        error_kind=result.error_kind,
+        error_msg=result.error_msg,
+    )
+    audit(
+        db,
+        admin,
+        "test_auth_token",
+        "auth_token",
+        token.id,
+        {"success": result.success, "error_kind": result.error_kind, "room_id": room.id},
+    )
+    db.commit()
+    return AdminHealthTestOut(success=result.success and result.balance is not None, error_kind=result.error_kind, error_msg=result.error_msg)
+
+
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_token(
     token_id: int,
@@ -449,24 +539,84 @@ def delete_token(
     db.commit()
 
 
-@router.get("/smtp", response_model=SmtpSettingsOut)
-def get_smtp_settings(
+@router.get("/smtp", response_model=list[SmtpSettingsOut])
+def list_smtp_settings(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
+) -> list[SmtpSettingsOut]:
+    rows = db.scalars(select(SmtpSettings).order_by(SmtpSettings.id))
+    return [_smtp_out(row) for row in rows]
+
+
+@router.get("/smtp/health-logs", response_model=list[SmtpHealthLogOut])
+def list_smtp_health_logs(
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> list[SmtpHealthLogOut]:
+    rows = list(
+        db.execute(
+            select(SmtpHealthLog, SmtpSettings)
+            .outerjoin(SmtpSettings, SmtpSettings.id == SmtpHealthLog.smtp_settings_id)
+            .order_by(SmtpHealthLog.created_at.desc(), SmtpHealthLog.id.desc())
+            .limit(200)
+        ).all()
+    )
+    return [
+        SmtpHealthLogOut(
+            id=log.id,
+            smtp_id=log.smtp_settings_id,
+            smtp_name=smtp.name if smtp else None,
+            source=log.source,
+            recipient_email=log.recipient_email,
+            success=log.success,
+            error_kind=log.error_kind,
+            error_msg=log.error_msg,
+            health_status=log.health_status,
+            failure_count=log.failure_count,
+            created_at=log.created_at,
+        )
+        for log, smtp in rows
+    ]
+
+
+@router.post("/smtp", response_model=SmtpSettingsOut, status_code=status.HTTP_201_CREATED)
+def create_smtp_settings(
+    payload: SmtpSettingsCreate,
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
 ) -> SmtpSettingsOut:
-    return _smtp_out(db.get(SmtpSettings, 1))
+    row = SmtpSettings(
+        name=payload.name.strip(),
+        host=payload.host.strip(),
+        port=payload.port,
+        username=payload.username.strip() if payload.username else None,
+        password=payload.password or None,
+        from_email=payload.from_email.strip(),
+        enabled=payload.enabled,
+        min_interval_seconds=payload.min_interval_seconds,
+        use_ssl=payload.use_ssl,
+        use_starttls=payload.use_starttls,
+    )
+    db.add(row)
+    db.flush()
+    audit(db, admin, "create_smtp_settings", "smtp_settings", row.id, {"name": row.name})
+    db.commit()
+    db.refresh(row)
+    return _smtp_out(row)
 
 
-@router.put("/smtp", response_model=SmtpSettingsOut)
+@router.patch("/smtp/{smtp_id}", response_model=SmtpSettingsOut)
 def update_smtp_settings(
+    smtp_id: int,
     payload: SmtpSettingsUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> SmtpSettingsOut:
-    row = db.get(SmtpSettings, 1)
+    row = db.get(SmtpSettings, smtp_id)
     if row is None:
-        row = SmtpSettings(id=1)
-        db.add(row)
+        raise HTTPException(status_code=404, detail="smtp account not found")
+    if payload.name is not None:
+        row.name = payload.name.strip()
     if payload.host is not None:
         row.host = payload.host.strip() or None
     if payload.port is not None:
@@ -477,6 +627,10 @@ def update_smtp_settings(
         row.password = payload.password or None
     if payload.from_email is not None:
         row.from_email = payload.from_email.strip() or None
+    if payload.enabled is not None:
+        row.enabled = payload.enabled
+    if payload.min_interval_seconds is not None:
+        row.min_interval_seconds = payload.min_interval_seconds
     if payload.use_ssl is not None:
         row.use_ssl = payload.use_ssl
     if payload.use_starttls is not None:
@@ -486,7 +640,7 @@ def update_smtp_settings(
         admin,
         "update_smtp_settings",
         "smtp_settings",
-        1,
+        row.id,
         {"fields": [field for field in payload.model_fields_set if field != "password"], "password_updated": payload.password is not None},
     )
     db.commit()
@@ -494,12 +648,44 @@ def update_smtp_settings(
     return _smtp_out(row)
 
 
+@router.delete("/smtp/{smtp_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_smtp_settings(
+    smtp_id: int,
+    admin: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> None:
+    row = db.get(SmtpSettings, smtp_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="smtp account not found")
+    audit(db, admin, "delete_smtp_settings", "smtp_settings", row.id, {"name": row.name})
+    db.delete(row)
+    db.commit()
+
+
 @router.post("/smtp/test")
 def test_smtp_settings(
     payload: SmtpTestRequest,
     _: AdminUser = Depends(current_admin),
 ) -> dict[str, str]:
-    result = send_email(payload.to_email, "Electricity Monitor SMTP 测试", "这是一封管理后台 SMTP 测试邮件。")
+    result = send_email(payload.to_email, "Electricity Monitor SMTP 测试", "这是一封管理后台 SMTP 测试邮件。", source="admin_test")
+    if not result.ok:
+        raise HTTPException(status_code=502, detail=result.error)
+    return {"status": "sent"}
+
+
+@router.post("/smtp/{smtp_id}/test")
+def test_one_smtp_settings(
+    smtp_id: int,
+    payload: SmtpTestRequest,
+    _: AdminUser = Depends(current_admin),
+) -> dict[str, str]:
+    result = send_email(
+        payload.to_email,
+        "Electricity Monitor SMTP 测试",
+        "这是一封管理后台 SMTP 测试邮件。",
+        smtp_id=smtp_id,
+        source="admin_test",
+    )
     if not result.ok:
         raise HTTPException(status_code=502, detail=result.error)
     return {"status": "sent"}
@@ -589,17 +775,46 @@ def get_admin_status(
 ) -> AdminStatusOut:
     token_count = db.scalar(select(func.count(AuthToken.id))) or 0
     enabled_token_count = db.scalar(select(func.count(AuthToken.id)).where(AuthToken.enabled.is_(True))) or 0
+    unhealthy_token_count = db.scalar(
+        select(func.count(AuthToken.id)).where(AuthToken.health_status.in_(["warning", "invalid"]))
+    ) or 0
+    smtp_count = db.scalar(select(func.count(SmtpSettings.id))) or 0
+    enabled_smtp_count = db.scalar(select(func.count(SmtpSettings.id)).where(SmtpSettings.enabled.is_(True))) or 0
+    unhealthy_smtp_count = db.scalar(
+        select(func.count(SmtpSettings.id)).where(SmtpSettings.health_status.in_(["warning", "invalid"]))
+    ) or 0
     pending_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "pending")) or 0
     failed_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "error")) or 0
+    sent_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "sent")) or 0
+    total_notifications = db.scalar(select(func.count(Notification.id))) or 0
+    recent_cutoff = datetime.now() - timedelta(hours=24)
+    recent_sent_notifications = db.scalar(
+        select(func.count(Notification.id)).where(Notification.status == "sent", Notification.sent_at >= recent_cutoff)
+    ) or 0
+    recent_failed_notifications = db.scalar(
+        select(func.count(Notification.id)).where(Notification.status == "error", Notification.created_at >= recent_cutoff)
+    ) or 0
     total_rooms = db.scalar(select(func.count(func.distinct(UserRoom.room_id)))) or 0
+    active_bindings = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.enabled.is_(True))) or 0
     total_users = db.scalar(select(func.count(User.id))) or 0
+    verified_users = db.scalar(select(func.count(User.id)).where(User.is_verified.is_(True))) or 0
     latest_read_at = db.scalar(select(ElectricityReading.read_at).order_by(ElectricityReading.read_at.desc()).limit(1))
     return AdminStatusOut(
         token_count=token_count,
         enabled_token_count=enabled_token_count,
-        smtp_configured=load_smtp_config().configured,
+        unhealthy_token_count=unhealthy_token_count,
+        smtp_count=smtp_count,
+        enabled_smtp_count=enabled_smtp_count,
+        unhealthy_smtp_count=unhealthy_smtp_count,
+        smtp_configured=smtp_configured(),
         pending_notifications=pending_notifications,
         failed_notifications=failed_notifications,
+        sent_notifications=sent_notifications,
+        total_notifications=total_notifications,
+        recent_sent_notifications=recent_sent_notifications,
+        recent_failed_notifications=recent_failed_notifications,
+        active_bindings=active_bindings,
+        verified_users=verified_users,
         total_rooms=total_rooms,
         total_users=total_users,
         latest_read_at=latest_read_at,

@@ -131,19 +131,72 @@ export interface AdminAuthToken {
   enabled: boolean;
   min_interval_seconds: number;
   last_used_at?: string | null;
+  health_status: string;
+  failure_count: number;
+  last_checked_at?: string | null;
+  last_success_at?: string | null;
+  last_error_at?: string | null;
+  last_error_kind?: string | null;
+  last_error_msg?: string | null;
   created_at: string;
 }
 
 export interface SmtpSettings {
+  id: number;
+  name: string;
   configured: boolean;
   host?: string | null;
   port: number;
   username?: string | null;
   from_email?: string | null;
+  enabled: boolean;
+  min_interval_seconds: number;
   use_ssl: boolean;
   use_starttls: boolean;
   password_configured: boolean;
+  last_used_at?: string | null;
+  health_status: string;
+  failure_count: number;
+  last_checked_at?: string | null;
+  last_success_at?: string | null;
+  last_error_at?: string | null;
+  last_error_kind?: string | null;
+  last_error_msg?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface AdminHealthTestResult {
+  success: boolean;
+  error_kind?: string | null;
+  error_msg?: string | null;
+}
+
+export interface AdminAuthTokenHealthLog {
+  id: number;
+  token_id?: number | null;
+  token_name?: string | null;
+  source: string;
+  success: boolean;
+  error_kind?: string | null;
+  error_msg?: string | null;
+  health_status: string;
+  failure_count: number;
+  created_at: string;
+}
+
+export interface SmtpHealthLog {
+  id: number;
+  smtp_id?: number | null;
+  smtp_name?: string | null;
+  source: string;
+  recipient_email?: string | null;
+  success: boolean;
+  error_kind?: string | null;
+  error_msg?: string | null;
+  health_status: string;
+  failure_count: number;
+  created_at: string;
 }
 
 export interface AppearanceSettings {
@@ -198,9 +251,19 @@ export interface RuntimeLimits {
 export interface AdminStatus {
   token_count: number;
   enabled_token_count: number;
+  unhealthy_token_count: number;
+  smtp_count: number;
+  enabled_smtp_count: number;
+  unhealthy_smtp_count: number;
   smtp_configured: boolean;
   pending_notifications: number;
   failed_notifications: number;
+  sent_notifications: number;
+  total_notifications: number;
+  recent_sent_notifications: number;
+  recent_failed_notifications: number;
+  active_bindings: number;
+  verified_users: number;
   total_rooms: number;
   total_users: number;
   latest_read_at?: string | null;

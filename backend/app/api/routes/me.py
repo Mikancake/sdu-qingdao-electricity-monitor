@@ -41,6 +41,7 @@ from app.services.notifications import send_test_email_for_user
 from app.services.rate_limit import enforce_rate_limit, rate_limit_key
 from app.services.rooms import RoomInputError, normalize_room_data
 from app.services.runtime_settings import get_runtime_config
+from app.services.token_health import record_token_health
 from app.services.token_pool import select_available_token
 from app.services.usage import get_room_usage_stats, list_room_readings
 from app.services.users import delete_user_account
@@ -112,6 +113,14 @@ def query_room_balance_once(db: Session, room: Room):
 
     result = CampusElectricityClient(token.token_value).query_room(room)
     token.last_used_at = datetime.now()
+    record_token_health(
+        db,
+        token,
+        success=result.success and result.balance is not None,
+        source="user",
+        error_kind=result.error_kind,
+        error_msg=result.error_msg,
+    )
     if result.success and result.balance is not None:
         return result.balance
 

@@ -114,9 +114,50 @@ def _ensure_sqlite_existing_columns(engine: Engine) -> None:
     )
 
 
+def _ensure_existing_columns(engine: Engine) -> None:
+    _ensure_column(engine, "auth_tokens", "health_status", "ALTER TABLE auth_tokens ADD COLUMN health_status VARCHAR(40) DEFAULT 'unknown'")
+    _ensure_column(engine, "auth_tokens", "failure_count", "ALTER TABLE auth_tokens ADD COLUMN failure_count INTEGER DEFAULT 0")
+    _ensure_column(engine, "auth_tokens", "last_checked_at", "ALTER TABLE auth_tokens ADD COLUMN last_checked_at TIMESTAMP")
+    _ensure_column(engine, "auth_tokens", "last_success_at", "ALTER TABLE auth_tokens ADD COLUMN last_success_at TIMESTAMP")
+    _ensure_column(engine, "auth_tokens", "last_error_at", "ALTER TABLE auth_tokens ADD COLUMN last_error_at TIMESTAMP")
+    _ensure_column(engine, "auth_tokens", "last_error_kind", "ALTER TABLE auth_tokens ADD COLUMN last_error_kind VARCHAR(80)")
+    _ensure_column(engine, "auth_tokens", "last_error_msg", "ALTER TABLE auth_tokens ADD COLUMN last_error_msg TEXT")
+
+    _ensure_column(engine, "smtp_settings", "name", "ALTER TABLE smtp_settings ADD COLUMN name VARCHAR(80)")
+    _ensure_column(engine, "smtp_settings", "enabled", "ALTER TABLE smtp_settings ADD COLUMN enabled BOOLEAN DEFAULT TRUE")
+    _ensure_column(engine, "smtp_settings", "min_interval_seconds", "ALTER TABLE smtp_settings ADD COLUMN min_interval_seconds INTEGER DEFAULT 0")
+    _ensure_column(engine, "smtp_settings", "last_used_at", "ALTER TABLE smtp_settings ADD COLUMN last_used_at TIMESTAMP")
+    _ensure_column(engine, "smtp_settings", "health_status", "ALTER TABLE smtp_settings ADD COLUMN health_status VARCHAR(40) DEFAULT 'unknown'")
+    _ensure_column(engine, "smtp_settings", "failure_count", "ALTER TABLE smtp_settings ADD COLUMN failure_count INTEGER DEFAULT 0")
+    _ensure_column(engine, "smtp_settings", "last_checked_at", "ALTER TABLE smtp_settings ADD COLUMN last_checked_at TIMESTAMP")
+    _ensure_column(engine, "smtp_settings", "last_success_at", "ALTER TABLE smtp_settings ADD COLUMN last_success_at TIMESTAMP")
+    _ensure_column(engine, "smtp_settings", "last_error_at", "ALTER TABLE smtp_settings ADD COLUMN last_error_at TIMESTAMP")
+    _ensure_column(engine, "smtp_settings", "last_error_kind", "ALTER TABLE smtp_settings ADD COLUMN last_error_kind VARCHAR(80)")
+    _ensure_column(engine, "smtp_settings", "last_error_msg", "ALTER TABLE smtp_settings ADD COLUMN last_error_msg VARCHAR(1024)")
+    _ensure_column(engine, "smtp_settings", "created_at", "ALTER TABLE smtp_settings ADD COLUMN created_at TIMESTAMP")
+
+
+def _backfill_existing_data(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE auth_tokens SET health_status = 'unknown' WHERE health_status IS NULL"))
+        conn.execute(text("UPDATE auth_tokens SET failure_count = 0 WHERE failure_count IS NULL"))
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("UPDATE smtp_settings SET name = 'smtp-' || id WHERE name IS NULL OR name = ''"))
+        else:
+            conn.execute(text("UPDATE smtp_settings SET name = CONCAT('smtp-', id) WHERE name IS NULL OR name = ''"))
+        conn.execute(text("UPDATE smtp_settings SET enabled = TRUE WHERE enabled IS NULL"))
+        conn.execute(text("UPDATE smtp_settings SET min_interval_seconds = 0 WHERE min_interval_seconds IS NULL"))
+        conn.execute(text("UPDATE smtp_settings SET health_status = 'unknown' WHERE health_status IS NULL"))
+        conn.execute(text("UPDATE smtp_settings SET failure_count = 0 WHERE failure_count IS NULL"))
+        conn.execute(text("UPDATE smtp_settings SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL"))
+        conn.execute(text("UPDATE smtp_settings SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+
+
 def create_schema(engine: Engine, *, ensure_admin: bool = True) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_existing_columns(engine)
+    _ensure_existing_columns(engine)
+    _backfill_existing_data(engine)
     if not ensure_admin:
         return
     with SessionLocal() as db:

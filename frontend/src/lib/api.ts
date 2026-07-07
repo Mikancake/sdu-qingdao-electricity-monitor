@@ -1,5 +1,7 @@
 import type {
   AppearanceSettings,
+  AdminAuthTokenHealthLog,
+  AdminHealthTestResult,
   AdminAuthToken,
   AdminAuditLog,
   AdminLoginResponse,
@@ -17,6 +19,7 @@ import type {
   RuntimeLimits,
   RuntimeSettings,
   SmtpSettings,
+  SmtpHealthLog,
   User,
   UserRoomBinding,
   UserRoomSummary
@@ -210,17 +213,40 @@ export interface ApiClient {
     payload: { name?: string; token_value?: string; min_interval_seconds?: number; enabled?: boolean }
   ) => Promise<AdminAuthToken>;
   deleteAdminToken: (tokenId: number) => Promise<void>;
-  getSmtpSettings: () => Promise<SmtpSettings>;
-  updateSmtpSettings: (payload: {
-    host?: string | null;
-    port?: number;
+  testAdminToken: (tokenId: number, payload?: { room_id?: number | null }) => Promise<AdminHealthTestResult>;
+  listAdminTokenHealthLogs: () => Promise<AdminAuthTokenHealthLog[]>;
+  listSmtpSettings: () => Promise<SmtpSettings[]>;
+  createSmtpSettings: (payload: {
+    name: string;
+    host: string;
+    port: number;
     username?: string | null;
     password?: string | null;
-    from_email?: string | null;
-    use_ssl?: boolean;
-    use_starttls?: boolean;
+    from_email: string;
+    enabled: boolean;
+    min_interval_seconds: number;
+    use_ssl: boolean;
+    use_starttls: boolean;
   }) => Promise<SmtpSettings>;
-  testSmtpSettings: (payload: { to_email: string }) => Promise<{ status: string }>;
+  updateSmtpSettings: (
+    smtpId: number,
+    payload: {
+      name?: string;
+      host?: string | null;
+      port?: number;
+      username?: string | null;
+      password?: string | null;
+      from_email?: string | null;
+      enabled?: boolean;
+      min_interval_seconds?: number;
+      use_ssl?: boolean;
+      use_starttls?: boolean;
+    }
+  ) => Promise<SmtpSettings>;
+  deleteSmtpSettings: (smtpId: number) => Promise<void>;
+  testSmtpSettings: (smtpId: number, payload: { to_email: string }) => Promise<{ status: string }>;
+  listSmtpHealthLogs: () => Promise<SmtpHealthLog[]>;
+  testAnySmtpSettings: (payload: { to_email: string }) => Promise<{ status: string }>;
   getAppearanceSettings: () => Promise<AppearanceSettings>;
   updateAppearanceSettings: (payload: Partial<AppearanceSettings>) => Promise<AppearanceSettings>;
   uploadAppearanceBackground: (payload: { theme: "light" | "dark"; file: File }) => Promise<{ theme: "light" | "dark"; url: string }>;
@@ -467,17 +493,54 @@ export function createApiClient(token?: string | null): ApiClient {
         },
         token
       ),
-    getSmtpSettings: () => request<SmtpSettings>("/api/admin/smtp", {}, token),
-    updateSmtpSettings: (payload) =>
-      request<SmtpSettings>(
-        "/api/admin/smtp",
+    testAdminToken: (tokenId, payload = {}) =>
+      request<AdminHealthTestResult>(
+        `/api/admin/tokens/${tokenId}/test`,
         {
-          method: "PUT",
+          method: "POST",
           body: JSON.stringify(payload)
         },
         token
       ),
-    testSmtpSettings: (payload) =>
+    listAdminTokenHealthLogs: () => request<AdminAuthTokenHealthLog[]>("/api/admin/tokens/health-logs", {}, token),
+    listSmtpSettings: () => request<SmtpSettings[]>("/api/admin/smtp", {}, token),
+    createSmtpSettings: (payload) =>
+      request<SmtpSettings>(
+        "/api/admin/smtp",
+        {
+          method: "POST",
+          body: JSON.stringify(payload)
+        },
+        token
+      ),
+    updateSmtpSettings: (smtpId, payload) =>
+      request<SmtpSettings>(
+        `/api/admin/smtp/${smtpId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        },
+        token
+      ),
+    deleteSmtpSettings: (smtpId) =>
+      request<void>(
+        `/api/admin/smtp/${smtpId}`,
+        {
+          method: "DELETE"
+        },
+        token
+      ),
+    testSmtpSettings: (smtpId, payload) =>
+      request<{ status: string }>(
+        `/api/admin/smtp/${smtpId}/test`,
+        {
+          method: "POST",
+          body: JSON.stringify(payload)
+        },
+        token
+      ),
+    listSmtpHealthLogs: () => request<SmtpHealthLog[]>("/api/admin/smtp/health-logs", {}, token),
+    testAnySmtpSettings: (payload) =>
       request<{ status: string }>(
         "/api/admin/smtp/test",
         {
