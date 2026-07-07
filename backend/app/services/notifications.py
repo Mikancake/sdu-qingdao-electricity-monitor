@@ -316,7 +316,13 @@ def send_test_email_for_user(db: Session, user: User) -> EmailSendResult:
         )
     )
     content = _build_power_report_email(db, user, bindings, test=True)
-    return send_email(user.notification_recipient_email, content.subject, content.text_body, html_body=content.html_body)
+    return send_email(
+        user.notification_recipient_email,
+        content.subject,
+        content.text_body,
+        html_body=content.html_body,
+        source="user_test",
+    )
 
 
 def _daily_report_due(user: User, now: datetime) -> bool:
@@ -348,7 +354,13 @@ def run_daily_reports() -> DailyReportBatchResult:
                 )
             )
             content = _build_power_report_email(db, user, bindings, test=False)
-            result = send_email(user.notification_recipient_email, content.subject, content.text_body, html_body=content.html_body)
+            result = send_email(
+                user.notification_recipient_email,
+                content.subject,
+                content.text_body,
+                html_body=content.html_body,
+                source="daily_report",
+            )
             if result.ok:
                 user.daily_report_last_sent_at = datetime.now()
                 sent += 1
@@ -410,7 +422,14 @@ def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatc
             db.add(notification)
             db.flush()
 
-            result = send_email(recipient_email, content.subject, content.text_body, html_body=content.html_body)
+            result = send_email(
+                recipient_email,
+                content.subject,
+                content.text_body,
+                html_body=content.html_body,
+                source="low_power",
+                notification_id=notification.id,
+            )
             if result.ok:
                 notification.status = "sent"
                 notification.sent_at = datetime.now()

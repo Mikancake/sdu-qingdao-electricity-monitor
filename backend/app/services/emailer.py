@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.smtp_health_log import SmtpHealthLog
 from app.models.smtp_settings import SmtpSettings
 
@@ -190,6 +191,33 @@ def _record_smtp_health(
         return
 
 
+def _record_email_delivery(
+    result: EmailSendResult,
+    *,
+    source: str,
+    recipient_email: str,
+    subject: str,
+    notification_id: int | None = None,
+) -> None:
+    try:
+        with SessionLocal() as db:
+            db.add(
+                EmailDeliveryLog(
+                    smtp_settings_id=result.smtp_id,
+                    notification_id=notification_id,
+                    source=source,
+                    recipient_email=recipient_email,
+                    subject=subject[:255],
+                    status="sent" if result.ok else "error",
+                    error_msg=result.error,
+                    sent_at=datetime.now() if result.ok else None,
+                )
+            )
+            db.commit()
+    except SQLAlchemyError:
+        return
+
+
 def _build_message(to_email: str, subject: str, body: str, config: SmtpConfig, *, html_body: str | None = None) -> EmailMessage:
     message = EmailMessage()
     message["From"] = config.from_email or ""
@@ -243,6 +271,7 @@ def send_email(
     retry_delay_seconds: float = 2.0,
     smtp_id: int | None = None,
     source: str = "send",
+    notification_id: int | None = None,
 ) -> EmailSendResult:
     attempts = max(1, retries)
     last_result = EmailSendResult(False, "email was not attempted")
@@ -250,11 +279,14 @@ def send_email(
     for index in range(attempts):
         configs = _ordered_available_configs(load_smtp_configs(smtp_id=smtp_id))
         if not configs:
-            return EmailSendResult(False, "SMTP is not configured or all SMTP accounts are cooling down")
+            last_result = EmailSendResult(False, "SMTP is not configured or all SMTP accounts are cooling down")
+            _record_email_delivery(last_result, source=source, recipient_email=to_email, subject=subject, notification_id=notification_id)
+            return last_result
 
         for config in configs:
             last_result = _send_with_config(config, to_email, subject, body, html_body=html_body, source=source)
             if last_result.ok:
+                _record_email_delivery(last_result, source=source, recipient_email=to_email, subject=subject, notification_id=notification_id)
                 return last_result
             if last_result.error == "SMTP is not configured":
                 continue
@@ -262,6 +294,7 @@ def send_email(
         if index < attempts - 1 and retry_delay_seconds > 0:
             time.sleep(retry_delay_seconds)
 
+    _record_email_delivery(last_result, source=source, recipient_email=to_email, subject=subject, notification_id=notification_id)
     return last_result
 
 

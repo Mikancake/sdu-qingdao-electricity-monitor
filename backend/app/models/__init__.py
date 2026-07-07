@@ -5,6 +5,7 @@ from app.models.auth_token import AuthToken
 from app.models.auth_token_health_log import AuthTokenHealthLog
 from app.models.check_attempt import CheckAttempt
 from app.models.email_verification_code import EmailVerificationCode
+from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.electricity_reading import ElectricityReading
 from app.models.notification import Notification
 from app.models.room import Room
@@ -20,6 +21,7 @@ __all__ = [
     "AuthToken",
     "AuthTokenHealthLog",
     "CheckAttempt",
+    "EmailDeliveryLog",
     "EmailVerificationCode",
     "ElectricityReading",
     "Notification",

@@ -202,9 +202,9 @@ function StatusPanel({
         <Card>
           <CardContent className="flex items-center justify-between">
             <div>
-              <div className="text-xs text-muted-foreground">累计邮件</div>
+              <div className="text-xs text-muted-foreground">提醒与日报</div>
               <div className="mt-2 text-2xl font-semibold">{status?.sent_notifications ?? "--"}</div>
-              <div className="mt-1 text-xs text-muted-foreground">总记录 {status?.total_notifications ?? "--"}</div>
+              <div className="mt-1 text-xs text-muted-foreground">业务记录 {status?.total_notifications ?? "--"}</div>
             </div>
             <Mail className="text-primary" size={26} />
           </CardContent>
@@ -212,11 +212,23 @@ function StatusPanel({
         <Card>
           <CardContent className="flex items-center justify-between">
             <div>
-              <div className="text-xs text-muted-foreground">24h 邮件</div>
+              <div className="text-xs text-muted-foreground">24h 业务邮件</div>
               <div className="mt-2 text-2xl font-semibold">{status?.recent_sent_notifications ?? "--"}</div>
               <div className="mt-1 text-xs text-muted-foreground">失败 {status?.recent_failed_notifications ?? "--"}</div>
             </div>
             <Bell className="text-success" size={26} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center justify-between">
+            <div>
+              <div className="text-xs text-muted-foreground">全部发信</div>
+              <div className="mt-2 text-2xl font-semibold">{status?.all_sent_emails ?? "--"}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                24h {status?.recent_sent_emails ?? "--"} · 失败 {status?.recent_failed_emails ?? "--"}
+              </div>
+            </div>
+            <Mail className="text-primary" size={26} />
           </CardContent>
         </Card>
         <Card>

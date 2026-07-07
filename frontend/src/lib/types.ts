@@ -237,6 +237,7 @@ export interface DataRetentionCleanupResult {
   verification_codes_deleted: number;
   check_attempts_deleted: number;
   notifications_deleted: number;
+  email_delivery_logs_deleted: number;
   electricity_readings_deleted: number;
   admin_audit_logs_deleted: number;
   total_deleted: number;
@@ -262,6 +263,10 @@ export interface AdminStatus {
   total_notifications: number;
   recent_sent_notifications: number;
   recent_failed_notifications: number;
+  all_sent_emails: number;
+  all_total_emails: number;
+  recent_sent_emails: number;
+  recent_failed_emails: number;
   active_bindings: number;
   verified_users: number;
   total_rooms: number;

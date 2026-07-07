@@ -18,6 +18,7 @@ from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_user import AdminUser
 from app.models.auth_token import AuthToken
 from app.models.auth_token_health_log import AuthTokenHealthLog
+from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.electricity_reading import ElectricityReading
 from app.models.notification import Notification
 from app.models.room import Room
@@ -141,6 +142,11 @@ def _smtp_out(row: SmtpSettings) -> SmtpSettingsOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _next_smtp_id(db: Session) -> int:
+    current_max = db.scalar(select(func.max(SmtpSettings.id))) or 0
+    return int(current_max) + 1
 
 
 @router.post("/auth/login", response_model=AdminTokenOut)
@@ -586,6 +592,7 @@ def create_smtp_settings(
     db: Session = Depends(db_session),
 ) -> SmtpSettingsOut:
     row = SmtpSettings(
+        id=_next_smtp_id(db),
         name=payload.name.strip(),
         host=payload.host.strip(),
         port=payload.port,
@@ -598,9 +605,13 @@ def create_smtp_settings(
         use_starttls=payload.use_starttls,
     )
     db.add(row)
-    db.flush()
-    audit(db, admin, "create_smtp_settings", "smtp_settings", row.id, {"name": row.name})
-    db.commit()
+    try:
+        db.flush()
+        audit(db, admin, "create_smtp_settings", "smtp_settings", row.id, {"name": row.name})
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="smtp account could not be created, please retry") from exc
     db.refresh(row)
     return _smtp_out(row)
 
@@ -794,6 +805,34 @@ def get_admin_status(
     recent_failed_notifications = db.scalar(
         select(func.count(Notification.id)).where(Notification.status == "error", Notification.created_at >= recent_cutoff)
     ) or 0
+    daily_report_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.source == "daily_report", EmailDeliveryLog.status == "sent")
+    ) or 0
+    total_daily_report_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.source == "daily_report")
+    ) or 0
+    recent_daily_report_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(
+            EmailDeliveryLog.source == "daily_report",
+            EmailDeliveryLog.status == "sent",
+            EmailDeliveryLog.sent_at >= recent_cutoff,
+        )
+    ) or 0
+    recent_failed_daily_report_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(
+            EmailDeliveryLog.source == "daily_report",
+            EmailDeliveryLog.status == "error",
+            EmailDeliveryLog.created_at >= recent_cutoff,
+        )
+    ) or 0
+    all_sent_emails = db.scalar(select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "sent")) or 0
+    all_total_emails = db.scalar(select(func.count(EmailDeliveryLog.id))) or 0
+    recent_sent_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "sent", EmailDeliveryLog.sent_at >= recent_cutoff)
+    ) or 0
+    recent_failed_emails = db.scalar(
+        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "error", EmailDeliveryLog.created_at >= recent_cutoff)
+    ) or 0
     total_rooms = db.scalar(select(func.count(func.distinct(UserRoom.room_id)))) or 0
     active_bindings = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.enabled.is_(True))) or 0
     total_users = db.scalar(select(func.count(User.id))) or 0
@@ -809,10 +848,14 @@ def get_admin_status(
         smtp_configured=smtp_configured(),
         pending_notifications=pending_notifications,
         failed_notifications=failed_notifications,
-        sent_notifications=sent_notifications,
-        total_notifications=total_notifications,
-        recent_sent_notifications=recent_sent_notifications,
-        recent_failed_notifications=recent_failed_notifications,
+        sent_notifications=sent_notifications + daily_report_emails,
+        total_notifications=total_notifications + total_daily_report_emails,
+        recent_sent_notifications=recent_sent_notifications + recent_daily_report_emails,
+        recent_failed_notifications=recent_failed_notifications + recent_failed_daily_report_emails,
+        all_sent_emails=all_sent_emails,
+        all_total_emails=all_total_emails,
+        recent_sent_emails=recent_sent_emails,
+        recent_failed_emails=recent_failed_emails,
         active_bindings=active_bindings,
         verified_users=verified_users,
         total_rooms=total_rooms,

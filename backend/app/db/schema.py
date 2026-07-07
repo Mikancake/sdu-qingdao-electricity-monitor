@@ -136,6 +136,8 @@ def _ensure_existing_columns(engine: Engine) -> None:
     _ensure_column(engine, "smtp_settings", "last_error_msg", "ALTER TABLE smtp_settings ADD COLUMN last_error_msg VARCHAR(1024)")
     _ensure_column(engine, "smtp_settings", "created_at", "ALTER TABLE smtp_settings ADD COLUMN created_at TIMESTAMP")
 
+    _ensure_column(engine, "email_delivery_logs", "notification_id", "ALTER TABLE email_delivery_logs ADD COLUMN notification_id INTEGER")
+
 
 def _backfill_existing_data(engine: Engine) -> None:
     with engine.begin() as conn:
@@ -151,6 +153,39 @@ def _backfill_existing_data(engine: Engine) -> None:
         conn.execute(text("UPDATE smtp_settings SET failure_count = 0 WHERE failure_count IS NULL"))
         conn.execute(text("UPDATE smtp_settings SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL"))
         conn.execute(text("UPDATE smtp_settings SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO email_delivery_logs (
+                    notification_id,
+                    smtp_settings_id,
+                    source,
+                    recipient_email,
+                    subject,
+                    status,
+                    error_msg,
+                    created_at,
+                    sent_at
+                )
+                SELECT
+                    n.id,
+                    NULL,
+                    COALESCE(n.kind, 'low_power'),
+                    n.recipient_email,
+                    n.subject,
+                    n.status,
+                    n.error_msg,
+                    n.created_at,
+                    n.sent_at
+                FROM notifications n
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM email_delivery_logs e
+                    WHERE e.notification_id = n.id
+                )
+                """
+            )
+        )
 
 
 def create_schema(engine: Engine, *, ensure_admin: bool = True) -> None:

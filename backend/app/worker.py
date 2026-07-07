@@ -106,10 +106,11 @@ def main() -> int:
         if now >= next_cleanup_at:
             result = run_data_retention_cleanup()
             logger.info(
-                "data retention cleanup: verification_codes=%s check_attempts=%s notifications=%s readings=%s audit_logs=%s total=%s",
+                "data retention cleanup: verification_codes=%s check_attempts=%s notifications=%s email_logs=%s readings=%s audit_logs=%s total=%s",
                 result.verification_codes_deleted,
                 result.check_attempts_deleted,
                 result.notifications_deleted,
+                result.email_delivery_logs_deleted,
                 result.electricity_readings_deleted,
                 result.admin_audit_logs_deleted,
                 result.total_deleted,

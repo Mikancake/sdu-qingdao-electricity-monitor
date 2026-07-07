@@ -205,6 +205,7 @@ class DataRetentionCleanupOut(BaseModel):
     verification_codes_deleted: int
     check_attempts_deleted: int
     notifications_deleted: int
+    email_delivery_logs_deleted: int
     electricity_readings_deleted: int
     admin_audit_logs_deleted: int
     total_deleted: int
@@ -234,6 +235,10 @@ class AdminStatusOut(BaseModel):
     total_notifications: int
     recent_sent_notifications: int
     recent_failed_notifications: int
+    all_sent_emails: int
+    all_total_emails: int
+    recent_sent_emails: int
+    recent_failed_emails: int
     active_bindings: int
     verified_users: int
     total_rooms: int
