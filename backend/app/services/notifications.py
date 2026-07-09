@@ -79,7 +79,7 @@ def _format_value(value, suffix: str = "") -> str:
 
 def _format_daily_usage(stats) -> str:
     if stats.average_daily_usage is None:
-        return "暂无（至少需要 24 小时读数）"
+        return "暂无（至少需要有效下降读数）"
     return _format_value(stats.average_daily_usage, " 度/天")
 
 
@@ -142,7 +142,7 @@ def _room_card(binding: UserRoom, stats, *, readings_available: bool = True) -> 
           <tr>
             <td style="padding:14px 0 0;">
               <div style="border-radius:12px;background:#f8fafc;border:1px solid #e8edf5;padding:11px 12px;color:#667085;font-size:13px;line-height:1.7;">
-                历史读数不足 24 小时，暂不展示实测日均用电；低电量判断会先使用默认日均作为兜底。
+                历史读数还不足以计算实测日均用电；低电量判断会先使用默认日均作为兜底。
               </div>
             </td>
           </tr>
@@ -286,7 +286,7 @@ def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom],
         if not readings:
             lines.extend(["还没有历史读数，下一次同步后日报会更准确。", ""])
         elif stats.average_daily_usage_source != "measured":
-            lines.extend(["历史读数不足 24 小时，暂不展示实测日均用电。", ""])
+            lines.extend(["历史读数还不足以计算实测日均用电，暂不展示实测日均。", ""])
         cards.append(_room_card(binding, stats, readings_available=bool(readings)))
 
     if test:
@@ -331,8 +331,9 @@ def _daily_report_due(user: User, now: datetime) -> bool:
     interval_days = max(1, user.daily_report_interval_days or 1)
     if user.daily_report_last_sent_at is None:
         return True
-    comparable_now = now_like(user.daily_report_last_sent_at)
-    return user.daily_report_last_sent_at + timedelta(days=interval_days) <= comparable_now
+    comparable_now = now_like(user.daily_report_last_sent_at) if user.daily_report_last_sent_at.tzinfo else now
+    elapsed_days = (comparable_now.date() - user.daily_report_last_sent_at.date()).days
+    return elapsed_days >= interval_days
 
 
 def run_daily_reports() -> DailyReportBatchResult:

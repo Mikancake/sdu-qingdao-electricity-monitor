@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
@@ -10,7 +10,6 @@ from app.services.runtime_settings import get_runtime_config
 
 
 TWOPLACES = Decimal("0.01")
-MIN_AVERAGE_WINDOW_SECONDS = Decimal("86400")
 
 
 @dataclass(frozen=True)
@@ -67,26 +66,34 @@ def calculate_average_daily_usage(readings: list[ElectricityReading]) -> Average
         return AverageDailyUsage(value=None, window_hours=None)
 
     ordered = sorted(readings, key=lambda item: item.read_at)
-    total_window_seconds = Decimal(str(max((ordered[-1].read_at - ordered[0].read_at).total_seconds(), 0)))
-    window_hours = total_window_seconds / Decimal("3600")
-    if total_window_seconds < MIN_AVERAGE_WINDOW_SECONDS:
-        return AverageDailyUsage(value=None, window_hours=window_hours)
+    raw_window_seconds = Decimal(str(max((ordered[-1].read_at - ordered[0].read_at).total_seconds(), 0)))
+    raw_window_hours = raw_window_seconds / Decimal("3600")
 
     consumption = Decimal("0")
+    active_days: set[date] = set()
 
     previous = ordered[0]
     for current in ordered[1:]:
-        if current.balance < previous.balance:
-            consumption += previous.balance - current.balance
+        delta = previous.balance - current.balance
+        if delta > 0:
+            consumption += delta
+            previous_day = previous.read_at.date()
+            current_day = current.read_at.date()
+            if current_day <= previous_day:
+                active_days.add(current_day)
+            else:
+                day = previous_day + timedelta(days=1)
+                while day <= current_day:
+                    active_days.add(day)
+                    day += timedelta(days=1)
         previous = current
 
-    if consumption <= 0:
-        return AverageDailyUsage(value=None, window_hours=window_hours)
+    measured_days = len(active_days)
+    window_hours = Decimal(measured_days * 24) if measured_days > 0 else raw_window_hours
 
-    days = total_window_seconds / Decimal("86400")
-    if days <= 0:
+    if consumption <= 0 or measured_days <= 0:
         return AverageDailyUsage(value=None, window_hours=window_hours)
-    return AverageDailyUsage(value=consumption / days, window_hours=window_hours)
+    return AverageDailyUsage(value=consumption / Decimal(measured_days), window_hours=window_hours)
 
 
 def normalize_alert_threshold_mode(mode: str | None, fixed_threshold: Decimal | None) -> str:

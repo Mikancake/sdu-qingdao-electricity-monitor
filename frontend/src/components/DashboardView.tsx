@@ -81,10 +81,10 @@ function dailyUsageBasis(item: UserRoomSummary) {
 
 function usageAverageHint(item: UserRoomSummary) {
   if (hasMeasuredAverage(item)) {
-    return `基于${formatUsageWindow(item.usage.usage_window_hours)}计算`;
+    return `基于最近${formatUsageWindow(item.usage.usage_window_hours)}的余额下降记录计算`;
   }
   if (item.usage.latest_read_at) {
-    return "读数不足 24 小时，暂不显示实测日均";
+    return "有效下降读数不足，暂不显示实测日均";
   }
   return "暂无历史读数";
 }
@@ -96,7 +96,7 @@ function remainingHint(item: UserRoomSummary) {
   if (item.usage.days_remaining_source === "measured") {
     return "基于最近实测日均用电估算";
   }
-  return `基于${dailyUsageBasis(item)}估算，读数满 24 小时后改用实测`;
+  return `基于${dailyUsageBasis(item)}估算，有效下降读数充足后改用实测`;
 }
 
 function thresholdHint(item: UserRoomSummary) {

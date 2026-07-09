@@ -367,7 +367,7 @@ function AdminUserRoomEditor({
         ) : null}
         {thresholdMode === "average" ? (
           <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            低于 1 天用电量时提醒；读数不足 24 小时时先按默认日均用电估算。
+            低于 1 天用电量时提醒；有效下降读数不足时先按默认日均用电估算。
           </div>
         ) : null}
         <div>

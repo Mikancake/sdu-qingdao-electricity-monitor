@@ -171,7 +171,7 @@ function BindingAlertForm({
               value={alertDays}
               onChange={(event) => setAlertDays(event.target.value)}
             />
-            <div className="mt-1 text-xs text-muted-foreground">默认 1 天；读数不足 24 小时时先按默认 5 度/天估算。</div>
+            <div className="mt-1 text-xs text-muted-foreground">默认 1 天；有效下降读数不足时先按默认 5 度/天估算。</div>
           </div>
         ) : null}
         {thresholdMode === "fixed" ? (
@@ -191,7 +191,7 @@ function BindingAlertForm({
         ) : null}
         {thresholdMode === "average" ? (
           <div className="rounded-lg border border-border bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            电量低于 1 天用电量时提醒。读数不足 24 小时时先按默认 5 度/天估算。
+            电量低于 1 天用电量时提醒。有效下降读数不足时先按默认 5 度/天估算。
           </div>
         ) : null}
         <div>
