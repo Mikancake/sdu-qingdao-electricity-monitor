@@ -10,16 +10,22 @@ class UserCreate(BaseModel):
 
 class UserLogin(BaseModel):
     email: str = Field(min_length=3, max_length=255)
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class DeleteAccountRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class PasswordUpdateRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class EmailVerifyRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
-    code: str = Field(min_length=4, max_length=12)
+    code: str = Field(pattern=r"^\d{6}$")
+    password: str = Field(min_length=1, max_length=128)
 
 
 class NotificationEmailRequest(BaseModel):
@@ -28,7 +34,7 @@ class NotificationEmailRequest(BaseModel):
 
 class NotificationEmailVerifyRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
-    code: str = Field(min_length=4, max_length=12)
+    code: str = Field(pattern=r"^\d{6}$")
 
 
 class UserPreferencesUpdate(BaseModel):

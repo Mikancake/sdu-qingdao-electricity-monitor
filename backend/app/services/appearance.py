@@ -32,7 +32,13 @@ def update_appearance_settings(db: Session, updates: dict) -> AppearanceSettings
     current = get_appearance_settings(db).model_dump(exclude={"updated_at"})
     if "background_image_url" in updates and "light_background_image_url" not in updates:
         updates["light_background_image_url"] = updates["background_image_url"]
-    nullable_fields = {"background_image_url", "light_background_image_url", "dark_background_image_url"}
+    nullable_fields = {
+        "background_image_url",
+        "light_background_image_url",
+        "dark_background_image_url",
+        "light_background_blurred_url",
+        "dark_background_blurred_url",
+    }
     current.update({key: value for key, value in updates.items() if value is not None or key in nullable_fields})
     if "light_background_image_url" in updates:
         current["background_image_url"] = updates["light_background_image_url"]

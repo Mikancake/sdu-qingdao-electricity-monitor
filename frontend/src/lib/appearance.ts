@@ -7,6 +7,8 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   background_image_url: null,
   light_background_image_url: null,
   dark_background_image_url: null,
+  light_background_blurred_url: null,
+  dark_background_blurred_url: null,
   background_position: "center",
   background_overlay_opacity: 0.42,
   background_blur_px: 0,
@@ -40,10 +42,14 @@ function normalizeGlassEffectMode(value: unknown): AppearanceSettings["glass_eff
 export function normalizeAppearanceSettings(settings?: Partial<AppearanceSettings> | null): AppearanceSettings {
   const lightBackground = settings?.light_background_image_url?.trim() || settings?.background_image_url?.trim() || null;
   const darkBackground = settings?.dark_background_image_url?.trim() || null;
+  const lightBlurred = settings?.light_background_blurred_url?.trim() || null;
+  const darkBlurred = settings?.dark_background_blurred_url?.trim() || (!darkBackground ? lightBlurred : null);
   return {
     background_image_url: lightBackground,
     light_background_image_url: lightBackground,
     dark_background_image_url: darkBackground,
+    light_background_blurred_url: lightBlurred,
+    dark_background_blurred_url: darkBlurred,
     background_position: normalizeBackgroundPosition(settings?.background_position),
     background_overlay_opacity: clamp(
       settings?.background_overlay_opacity,
@@ -51,9 +57,9 @@ export function normalizeAppearanceSettings(settings?: Partial<AppearanceSetting
       0.82,
       DEFAULT_APPEARANCE_SETTINGS.background_overlay_opacity
     ),
-    background_blur_px: clamp(settings?.background_blur_px, 0, 12, DEFAULT_APPEARANCE_SETTINGS.background_blur_px),
+    background_blur_px: clamp(settings?.background_blur_px, 0, 18, DEFAULT_APPEARANCE_SETTINGS.background_blur_px),
     glass_card_opacity: clamp(settings?.glass_card_opacity, 0.28, 0.94, DEFAULT_APPEARANCE_SETTINGS.glass_card_opacity),
-    glass_blur_px: clamp(settings?.glass_blur_px, 0, 10, DEFAULT_APPEARANCE_SETTINGS.glass_blur_px),
+    glass_blur_px: clamp(settings?.glass_blur_px, 0, 16, DEFAULT_APPEARANCE_SETTINGS.glass_blur_px),
     glass_effect_mode: normalizeGlassEffectMode(settings?.glass_effect_mode)
   };
 }
@@ -95,14 +101,29 @@ export function applyAppearanceSettings(settings?: Partial<AppearanceSettings> |
   root.style.setProperty("--app-bg-image", safeCssUrl(next.light_background_image_url));
   root.style.setProperty("--app-bg-image-light", safeCssUrl(next.light_background_image_url));
   root.style.setProperty("--app-bg-image-dark", safeCssUrl(next.dark_background_image_url ?? next.light_background_image_url));
+  root.style.setProperty(
+    "--app-bg-image-blurred-light",
+    safeCssUrl(next.light_background_blurred_url ?? next.light_background_image_url)
+  );
+  root.style.setProperty(
+    "--app-bg-image-blurred-dark",
+    safeCssUrl(
+      next.dark_background_blurred_url ??
+        next.dark_background_image_url ??
+        next.light_background_blurred_url ??
+        next.light_background_image_url
+    )
+  );
   root.style.setProperty("--app-bg-position", next.background_position ?? "center");
   root.style.setProperty("--app-bg-overlay-opacity", String(next.background_overlay_opacity));
   root.style.setProperty("--app-bg-blur", `${next.background_blur_px}px`);
   root.style.setProperty("--glass-card-opacity", String(next.glass_card_opacity));
   root.style.setProperty("--glass-card-blur", `${next.glass_blur_px}px`);
-  root.style.setProperty("--glass-material-strength", String(0.28 + (next.glass_blur_px / 10) * 0.42));
+  root.style.setProperty("--glass-material-strength", String(0.28 + (next.glass_blur_px / 16) * 0.42));
   root.dataset.glassMode = next.glass_effect_mode;
   root.dataset.backgroundBlur = next.background_blur_px > 0 ? "on" : "off";
+  root.dataset.preblurLight = next.light_background_blurred_url ? "on" : "off";
+  root.dataset.preblurDark = next.dark_background_blurred_url ? "on" : "off";
 }
 
 export function applyStoredAppearanceSettings() {

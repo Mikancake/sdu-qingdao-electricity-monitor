@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import db_session, verified_user
 from app.core.config import settings
-from app.core.security import verify_password
+from app.core.security import hash_password, sign_access_token, verify_password, verify_verification_code
 from app.electricity.client import CampusElectricityClient
 from app.models.check_attempt import CheckAttempt
 from app.models.email_verification_code import EmailVerificationCode
@@ -19,7 +19,9 @@ from app.schemas.auth import (
     DeleteAccountRequest,
     NotificationEmailRequest,
     NotificationEmailVerifyRequest,
+    PasswordUpdateRequest,
     TestEmailOut,
+    TokenOut,
     UserOut,
     UserPreferencesUpdate,
     VerificationCodeOut,
@@ -38,7 +40,12 @@ from app.api.routes.auth import (
 )
 from app.services.room_checks import check_and_store_room
 from app.services.notifications import send_test_email_for_user
-from app.services.rate_limit import enforce_rate_limit, rate_limit_key
+from app.services.rate_limit import (
+    account_rate_limit_key,
+    client_rate_limit_key,
+    enforce_rate_limit,
+    rate_limit_key,
+)
 from app.services.rooms import RoomInputError, normalize_room_data
 from app.services.runtime_settings import get_runtime_config
 from app.services.token_health import record_token_health
@@ -55,6 +62,28 @@ ROOM_LOCATION_FIELDS = {"campus", "campus_param", "building_key", "building_name
 def now_like(value: datetime | None = None) -> datetime:
     tzinfo = value.tzinfo if value is not None else None
     return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
+
+
+def public_room_check_error(error_kind: str | None) -> tuple[int, dict[str, str]]:
+    if error_kind == "token":
+        return 503, {
+            "kind": "room_check_unavailable",
+            "message": "当前暂无可用的电量查询服务，请稍后再试。",
+        }
+    if error_kind in {"auth", "network", "http", "api"}:
+        return 502, {
+            "kind": "room_check_unavailable",
+            "message": "电量查询服务暂时不可用，请稍后再试。",
+        }
+    if error_kind == "parse":
+        return 422, {
+            "kind": "room_not_found",
+            "message": "没有查询到这个宿舍的电量，请检查宿舍楼和宿舍号是否正确。",
+        }
+    return 502, {
+        "kind": "room_check_failed",
+        "message": "电量查询失败，请稍后再试。",
+    }
 
 
 @router.get("/runtime-limits", response_model=RuntimeLimitsOut)
@@ -124,33 +153,19 @@ def query_room_balance_once(db: Session, room: Room):
     if result.success and result.balance is not None:
         return result.balance
 
-    if result.error_kind == "auth":
-        status_code = 502
-        message = "查询 Token 已失效，请联系管理员更新。"
-    elif result.error_kind == "network":
-        status_code = 502
-        message = "电量查询接口暂时连接失败，请稍后再试。"
-    else:
-        status_code = 422
-        message = "没有查询到这个宿舍的电量，请检查宿舍楼和宿舍号是否正确。"
-
-    raise HTTPException(
-        status_code=status_code,
-        detail={
-            "kind": "room_check_failed",
-            "message": message,
-            "error_kind": result.error_kind,
-            "error_msg": result.error_msg,
-        },
-    )
+    status_code, detail = public_room_check_error(result.error_kind)
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
-def get_my_binding(db: Session, user: User, binding_id: int) -> UserRoom:
-    binding = db.scalar(
+def get_my_binding(db: Session, user: User, binding_id: int, *, for_update: bool = False) -> UserRoom:
+    stmt = (
         select(UserRoom)
         .options(selectinload(UserRoom.room))
         .where(UserRoom.id == binding_id, UserRoom.user_id == user.id)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    binding = db.scalar(stmt)
     if binding is None:
         raise HTTPException(status_code=404, detail="room binding not found")
     return binding
@@ -243,6 +258,10 @@ def bind_my_room(
     db: Session = Depends(db_session),
 ) -> UserRoom:
     enforce_rate_limit(rate_limit_key(request, "me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+    locked_user = db.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked_user is None:
+        raise HTTPException(status_code=401, detail="user not found")
     runtime = get_runtime_config(db)
     bound_count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user.id)) or 0
     if bound_count >= runtime.max_rooms_per_user:
@@ -298,8 +317,9 @@ def check_my_room(
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> ElectricityReading:
-    binding = get_my_binding(db, user, binding_id)
+    binding = get_my_binding(db, user, binding_id, for_update=True)
     enforce_rate_limit(rate_limit_key(request, "me:manual-check", user.id, binding.id), limit=20, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:manual-check", user.id), limit=60, window_seconds=60 * 60)
     available_at = get_manual_check_available_at(db, binding)
     if available_at is not None:
         now = now_like(available_at)
@@ -315,7 +335,8 @@ def check_my_room(
         )
     outcome = check_and_store_room(db, binding.room, source="user", user_id=user.id, user_room_id=binding.id)
     if not outcome.success or outcome.reading_id is None:
-        raise HTTPException(status_code=502, detail={"kind": outcome.error_kind, "message": outcome.error_msg})
+        status_code, detail = public_room_check_error(outcome.error_kind)
+        raise HTTPException(status_code=status_code, detail=detail)
     reading = db.get(ElectricityReading, outcome.reading_id)
     if reading is None:
         raise HTTPException(status_code=500, detail="reading was not saved")
@@ -375,7 +396,7 @@ def list_my_check_attempts(
     limit: int = Query(default=200, ge=1, le=2000),
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
-) -> list[CheckAttempt]:
+) -> list[CheckAttemptOut]:
     room_ids = select(UserRoom.room_id).where(UserRoom.user_id == user.id)
     stmt = (
         select(CheckAttempt)
@@ -384,7 +405,15 @@ def list_my_check_attempts(
         .order_by(CheckAttempt.started_at.desc())
         .limit(limit)
     )
-    return list(db.scalars(stmt))
+    attempts = list(db.scalars(stmt))
+    return [
+        CheckAttemptOut.model_validate(attempt).model_copy(
+            update={"error_msg": public_room_check_error(attempt.error_kind)[1]["message"]}
+        )
+        if not attempt.success
+        else CheckAttemptOut.model_validate(attempt)
+        for attempt in attempts
+    ]
 
 
 @router.patch("/preferences", response_model=UserOut)
@@ -428,7 +457,7 @@ def send_my_test_email(
 
     result = send_test_email_for_user(db, user)
     if not result.ok:
-        raise HTTPException(status_code=502, detail=result.error or "test email failed")
+        raise HTTPException(status_code=502, detail="test email could not be sent; check the SMTP health log")
     user.test_email_sent_at = datetime.now()
     db.commit()
     return TestEmailOut(email=user.notification_recipient_email, email_sent=True)
@@ -443,6 +472,8 @@ def request_notification_email_code(
 ) -> VerificationCodeOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(client_rate_limit_key(request, "me:notification-email-code"), limit=50, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:notification-email-code", user.id), limit=10, window_seconds=60 * 60)
     enforce_rate_limit(rate_limit_key(request, "me:notification-email-code", user.id, email), limit=6, window_seconds=60 * 60)
     ensure_verification_email_not_cooling(db, email, "notification_email")
     record, code = create_verification_code(db, email, purpose="notification_email")
@@ -475,7 +506,7 @@ def verify_notification_email(
         .limit(5)
     )
     records = list(db.scalars(stmt))
-    matched = next((record for record in records if verify_password(payload.code, record.code_hash)), None)
+    matched = next((record for record in records if verify_verification_code(payload.code, record.code_hash)), None)
     if matched is None:
         raise HTTPException(status_code=400, detail="invalid or expired verification code")
 
@@ -588,11 +619,36 @@ def delete_my_room_binding(
 
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 def delete_my_account(
+    request: Request,
     payload: DeleteAccountRequest,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> None:
+    enforce_rate_limit(client_rate_limit_key(request, "me:delete-account"), limit=20, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:delete-account", user.id), limit=5, window_seconds=60 * 60)
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=400, detail="password is incorrect")
     delete_user_account(db, user)
     db.commit()
+
+
+@router.post("/password", response_model=TokenOut)
+def update_my_password(
+    request: Request,
+    payload: PasswordUpdateRequest,
+    user: User = Depends(verified_user),
+    db: Session = Depends(db_session),
+) -> TokenOut:
+    enforce_rate_limit(client_rate_limit_key(request, "me:password"), limit=20, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:password", user.id), limit=5, window_seconds=60 * 60)
+    if not verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="current password is incorrect")
+    if payload.new_password == payload.old_password:
+        raise HTTPException(status_code=422, detail="new password must be different")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    db.refresh(user)
+    return TokenOut(
+        access_token=sign_access_token(user.id, kind="user", password_hash=user.password_hash),
+        user=user,
+    )

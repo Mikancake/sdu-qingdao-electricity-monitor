@@ -60,7 +60,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
         setError("验证码至少需要 4 位，请检查后再提交。");
         return;
       }
-      await api.verifyEmail({ email, code });
+      await api.verifyEmail({ email, code, password });
       setMode("login");
       setMessage("邮箱已验证，可以登录。");
     } catch (err) {

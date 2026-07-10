@@ -10,7 +10,7 @@ from app.schemas.reading import ElectricityReadingOut
 from app.schemas.room import RoomCreate, RoomOut, RoomSummaryOut
 from app.services.room_checks import check_and_store_room
 from app.services.rooms import RoomInputError, normalize_room_data
-from app.services.usage import get_room_usage_stats, list_room_readings
+from app.services.usage import list_room_readings
 
 
 router = APIRouter()

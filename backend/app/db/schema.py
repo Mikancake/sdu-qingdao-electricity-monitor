@@ -1,4 +1,4 @@
-from sqlalchemy import inspect, text
+from sqlalchemy import Text, inspect, text
 from sqlalchemy.engine import Engine
 
 from app import models  # noqa: F401
@@ -188,10 +188,24 @@ def _backfill_existing_data(engine: Engine) -> None:
         )
 
 
+def _ensure_secret_column_types(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    password_column = next(
+        (column for column in inspect(engine).get_columns("smtp_settings") if column["name"] == "password"),
+        None,
+    )
+    if password_column is None or isinstance(password_column["type"], Text):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE smtp_settings ALTER COLUMN password TYPE TEXT"))
+
+
 def create_schema(engine: Engine, *, ensure_admin: bool = True) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_existing_columns(engine)
     _ensure_existing_columns(engine)
+    _ensure_secret_column_types(engine)
     _backfill_existing_data(engine)
     if not ensure_admin:
         return

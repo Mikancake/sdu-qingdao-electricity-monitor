@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -7,16 +8,26 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import current_user, db_session
 from app.core.config import settings
-from app.core.security import generate_numeric_code, hash_password, sign_access_token, verify_password
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    generate_numeric_code,
+    hash_password,
+    hash_verification_code,
+    password_needs_rehash,
+    sign_access_token,
+    verify_password,
+    verify_verification_code,
+)
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.user import User
 from app.schemas.auth import EmailVerifyRequest, RegisterOut, TokenOut, UserCreate, UserLogin, UserOut
 from app.services.emailer import send_verification_code
-from app.services.rate_limit import enforce_rate_limit, rate_limit_key
+from app.services.rate_limit import account_rate_limit_key, client_rate_limit_key, enforce_rate_limit
 from app.services.users import delete_user_account
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 VERIFICATION_EMAIL_COOLDOWN = timedelta(minutes=30)
 
 
@@ -30,7 +41,12 @@ def normalize_email(email: str) -> str:
 
 
 def ensure_email_shape(email: str) -> None:
-    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in email):
+        raise HTTPException(status_code=422, detail="invalid email")
+    if email.count("@") != 1:
+        raise HTTPException(status_code=422, detail="invalid email")
+    local_part, domain = email.split("@", 1)
+    if not local_part or not domain or domain.startswith(".") or domain.endswith(".") or "." not in domain:
         raise HTTPException(status_code=422, detail="invalid email")
 
 
@@ -43,7 +59,7 @@ def create_verification_code(
     code = generate_numeric_code()
     record = EmailVerificationCode(
         email=email,
-        code_hash=hash_password(code),
+        code_hash=hash_verification_code(code),
         password_hash=password_hash,
         purpose=purpose,
         expires_at=now_like() + timedelta(minutes=15),
@@ -105,7 +121,8 @@ def mark_verification_email_delivered(db: Session, record: EmailVerificationCode
 def deliver_verification_code(email: str, code: str) -> bool:
     result = send_verification_code(email, code)
     if not result.ok and not settings.debug:
-        raise HTTPException(status_code=503, detail=f"verification email failed: {result.error}")
+        logger.warning("verification email delivery failed for domain=%s: %s", email.rsplit("@", 1)[-1], result.error)
+        raise HTTPException(status_code=503, detail="verification email could not be sent; please retry later")
     return result.ok
 
 
@@ -113,7 +130,8 @@ def deliver_verification_code(email: str, code: str) -> bool:
 def register(request: Request, payload: UserCreate, db: Session = Depends(db_session)) -> RegisterOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
-    enforce_rate_limit(rate_limit_key(request, "auth:register", email), limit=20, window_seconds=60 * 60)
+    enforce_rate_limit(client_rate_limit_key(request, "auth:register"), limit=40, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("auth:register", email), limit=5, window_seconds=60 * 60)
     existing_user = db.scalar(select(User).where(User.email == email))
     if existing_user is not None and existing_user.is_verified:
         raise HTTPException(status_code=409, detail="email already registered")
@@ -136,7 +154,8 @@ def register(request: Request, payload: UserCreate, db: Session = Depends(db_ses
 def request_verification_code(request: Request, payload: UserLogin, db: Session = Depends(db_session)) -> RegisterOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
-    enforce_rate_limit(rate_limit_key(request, "auth:request-code", email), limit=15, window_seconds=60 * 60)
+    enforce_rate_limit(client_rate_limit_key(request, "auth:request-code"), limit=40, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("auth:request-code", email), limit=5, window_seconds=60 * 60)
     user = db.scalar(select(User).where(User.email == email))
     if user is not None:
         if not verify_password(payload.password, user.password_hash):
@@ -159,7 +178,8 @@ def request_verification_code(request: Request, payload: UserLogin, db: Session 
 def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = Depends(db_session)) -> User:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
-    enforce_rate_limit(rate_limit_key(request, "auth:verify-email", email), limit=60, window_seconds=15 * 60)
+    enforce_rate_limit(client_rate_limit_key(request, "auth:verify-email"), limit=100, window_seconds=15 * 60)
+    enforce_rate_limit(account_rate_limit_key("auth:verify-email", email), limit=20, window_seconds=15 * 60)
     now = now_like()
     stmt = (
         select(EmailVerificationCode)
@@ -173,17 +193,16 @@ def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = De
         .limit(5)
     )
     records = list(db.scalars(stmt))
-    matched = next((record for record in records if verify_password(payload.code, record.code_hash)), None)
-    if matched is None:
+    matched = next((record for record in records if verify_verification_code(payload.code, record.code_hash)), None)
+    if matched is None or matched.password_hash is None or not verify_password(payload.password, matched.password_hash):
         raise HTTPException(status_code=400, detail="invalid or expired verification code")
 
     user = db.scalar(select(User).where(User.email == email))
     if user is None:
-        if matched.password_hash is None:
-            raise HTTPException(status_code=400, detail="registration code is no longer valid")
         user = User(email=email, password_hash=matched.password_hash, is_verified=True)
         db.add(user)
     else:
+        user.password_hash = matched.password_hash
         user.is_verified = True
     user.notification_email = user.email
     user.notification_email_verified_at = now_like(user.notification_email_verified_at)
@@ -208,13 +227,23 @@ def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = De
 @router.post("/login", response_model=TokenOut)
 def login(request: Request, payload: UserLogin, db: Session = Depends(db_session)) -> TokenOut:
     email = normalize_email(payload.email)
-    enforce_rate_limit(rate_limit_key(request, "auth:login", email), limit=30, window_seconds=10 * 60)
+    enforce_rate_limit(client_rate_limit_key(request, "auth:login"), limit=60, window_seconds=10 * 60)
+    enforce_rate_limit(account_rate_limit_key("auth:login", email), limit=15, window_seconds=10 * 60)
     user = db.scalar(select(User).where(User.email == email))
-    if user is None or not verify_password(payload.password, user.password_hash):
+    password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
+    password_valid = verify_password(payload.password, password_hash)
+    if user is None or not password_valid:
         raise HTTPException(status_code=401, detail="invalid email or password")
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="email not verified")
-    return TokenOut(access_token=sign_access_token(user.id, kind="user"), user=user)
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(payload.password)
+        db.commit()
+        db.refresh(user)
+    return TokenOut(
+        access_token=sign_access_token(user.id, kind="user", password_hash=user.password_hash),
+        user=user,
+    )
 
 
 @router.get("/me", response_model=UserOut)

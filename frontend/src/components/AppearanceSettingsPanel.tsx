@@ -20,9 +20,9 @@ const appearancePositions: Array<{ key: AppearanceSettings["background_position"
 ];
 
 const glassEffectModes: Array<{ key: AppearanceSettings["glass_effect_mode"]; label: string; description: string }> = [
-  { key: "lite", label: "轻量玻璃", description: "默认推荐，不做实时背景采样，透明材质更统一。" },
-  { key: "liquid", label: "液态玻璃", description: "不使用实时 blur，用折射色层和内阴影模拟液态质感。" },
-  { key: "frosted", label: "Aero 毛玻璃", description: "单层实时 blur + 分层蒙层，质感更强但更吃性能。" }
+  { key: "lite", label: "轻量玻璃", description: "清晰、低开销，适合纯色或细节较少的背景。" },
+  { key: "liquid", label: "Liquid Glass", description: "导航与控件呈现环境材质，内容区域保持清晰。" },
+  { key: "frosted", label: "小米式毛玻璃", description: "复用上传时生成的预模糊纹理，滚动时无需实时计算。" }
 ];
 
 type AppearanceNumberSettingKey =
@@ -40,7 +40,10 @@ export function AppearanceSettingsPanel({
   appearance?: AppearanceSettings | null;
   saving: boolean;
   onSave: (payload: Partial<AppearanceSettings>) => void;
-  onUploadBackground?: (theme: "light" | "dark", file: File) => Promise<{ theme: "light" | "dark"; url: string }>;
+  onUploadBackground?: (
+    theme: "light" | "dark",
+    file: File
+  ) => Promise<{ theme: "light" | "dark"; url: string; blurred_url: string }>;
 }) {
   const [appearanceForm, setAppearanceForm] = useState<AppearanceSettings>(() => normalizeAppearanceSettings(appearance));
   const [dirty, setDirty] = useState(false);
@@ -90,7 +93,12 @@ export function AppearanceSettingsPanel({
     setUploadingTheme(theme);
     try {
       const result = await onUploadBackground(theme, file);
-      setAppearanceValue(theme === "light" ? "light_background_image_url" : "dark_background_image_url", result.url);
+      setDirty(true);
+      setAppearanceForm((current) => ({
+        ...current,
+        [theme === "light" ? "light_background_image_url" : "dark_background_image_url"]: result.url,
+        [theme === "light" ? "light_background_blurred_url" : "dark_background_blurred_url"]: result.blurred_url
+      }));
     } finally {
       setUploadingTheme(null);
     }
@@ -142,7 +150,10 @@ export function AppearanceSettingsPanel({
                 <Input
                   id="appearance-light-bg-url"
                   value={appearanceForm.light_background_image_url ?? ""}
-                  onChange={(event) => setAppearanceValue("light_background_image_url", event.target.value || null)}
+                  onChange={(event) => {
+                    setAppearanceValue("light_background_image_url", event.target.value || null);
+                    setAppearanceValue("light_background_blurred_url", null);
+                  }}
                   placeholder="https://example.com/light.jpg 或 /uploads/..."
                 />
                 <Input
@@ -161,7 +172,10 @@ export function AppearanceSettingsPanel({
                 <Input
                   id="appearance-dark-bg-url"
                   value={appearanceForm.dark_background_image_url ?? ""}
-                  onChange={(event) => setAppearanceValue("dark_background_image_url", event.target.value || null)}
+                  onChange={(event) => {
+                    setAppearanceValue("dark_background_image_url", event.target.value || null);
+                    setAppearanceValue("dark_background_blurred_url", null);
+                  }}
                   placeholder="https://example.com/dark.jpg 或 /uploads/..."
                 />
                 <Input
@@ -230,13 +244,13 @@ export function AppearanceSettingsPanel({
                 />
               </div>
               <div>
-                <Label htmlFor="appearance-bg-blur">背景模糊 {appearanceForm.background_blur_px}px</Label>
+                <Label htmlFor="appearance-bg-blur">背景模糊 {appearanceForm.background_blur_px}px（上传图使用预处理）</Label>
                 <input
                   id="appearance-bg-blur"
                   className="glass-range"
                   type="range"
                   min="0"
-                  max="12"
+                  max="18"
                   step="1"
                   value={appearanceForm.background_blur_px}
                   onChange={(event) => setAppearanceNumber("background_blur_px", event.target.value)}
@@ -256,13 +270,13 @@ export function AppearanceSettingsPanel({
                 />
               </div>
               <div>
-                <Label htmlFor="appearance-card-blur">卡片模糊 {appearanceForm.glass_blur_px}px</Label>
+                <Label htmlFor="appearance-card-blur">导航与控制层模糊 {appearanceForm.glass_blur_px}px</Label>
                 <input
                   id="appearance-card-blur"
                   className="glass-range"
                   type="range"
                   min="0"
-                  max="10"
+                  max="16"
                   step="1"
                   value={appearanceForm.glass_blur_px}
                   onChange={(event) => setAppearanceNumber("glass_blur_px", event.target.value)}

@@ -47,7 +47,7 @@ export function AppShell({
 }: AppShellProps) {
   return (
     <div className="app-background min-h-screen text-foreground">
-      <aside className="glass-panel fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
+      <aside className="app-sidebar liquid-surface glass-panel fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <BatteryCharging size={19} />
@@ -61,9 +61,9 @@ export function AppShell({
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm transition ${
+              className={`app-nav-item flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm ${
                 activeView === item.key
-                  ? "bg-primary text-primary-foreground"
+                  ? "app-nav-item-active bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
               onClick={() => onChangeView(item.key)}
@@ -93,7 +93,7 @@ export function AppShell({
       </aside>
 
       <div className="lg:pl-64">
-        <header className="glass-panel sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border/70 px-4 lg:px-6">
+        <header className="app-topbar liquid-surface glass-panel sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border/70 px-4 lg:px-6">
           <div className="min-w-0">
             <div className="text-sm font-semibold">
               {activeView === "dashboard"
@@ -119,13 +119,13 @@ export function AppShell({
           </div>
         </header>
 
-        <nav className="glass-panel grid grid-cols-4 gap-2 border-b border-border/70 px-3 py-2 lg:hidden">
+        <nav className="mobile-liquid-nav liquid-surface glass-panel fixed grid grid-cols-4 gap-1 lg:hidden">
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`flex h-9 items-center justify-center gap-2 rounded-md text-xs transition ${
+              className={`app-nav-item mobile-nav-item flex items-center justify-center gap-1 text-xs ${
                 activeView === item.key
-                  ? "bg-primary text-primary-foreground"
+                  ? "app-nav-item-active bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
               onClick={() => onChangeView(item.key)}
@@ -137,7 +137,7 @@ export function AppShell({
           ))}
         </nav>
 
-        <main className="mx-auto w-full max-w-7xl px-4 py-5 lg:px-6">{children}</main>
+        <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-5 lg:px-6 lg:pb-5">{children}</main>
       </div>
     </div>
   );

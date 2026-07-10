@@ -210,6 +210,8 @@ export interface AppearanceSettings {
   background_image_url?: string | null;
   light_background_image_url?: string | null;
   dark_background_image_url?: string | null;
+  light_background_blurred_url?: string | null;
+  dark_background_blurred_url?: string | null;
   background_position: "top" | "center" | "bottom";
   background_overlay_opacity: number;
   background_blur_px: number;

@@ -13,7 +13,7 @@ AlertThresholdMode = Literal["days", "average", "fixed"]
 class UserRoomCreate(RoomCreate):
     alert_days: int = Field(default=1, ge=1, le=30)
     alert_threshold_mode: AlertThresholdMode = "days"
-    low_power_threshold: Decimal | None = Field(default=None, ge=0)
+    low_power_threshold: Decimal | None = Field(default=None, ge=0, le=100_000, max_digits=8, decimal_places=2)
 
 
 class UserRoomUpdate(BaseModel):
@@ -25,7 +25,7 @@ class UserRoomUpdate(BaseModel):
     room_number: str | None = Field(default=None, min_length=1, max_length=40)
     alert_days: int | None = Field(default=None, ge=1, le=30)
     alert_threshold_mode: AlertThresholdMode | None = None
-    low_power_threshold: Decimal | None = Field(default=None, ge=0)
+    low_power_threshold: Decimal | None = Field(default=None, ge=0, le=100_000, max_digits=8, decimal_places=2)
     manual_check_cooldown_seconds: int | None = Field(default=None, ge=0, le=60 * 60)
     notify_cooldown_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     enabled: bool | None = None

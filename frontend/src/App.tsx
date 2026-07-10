@@ -1,16 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, createApiClient, getApiErrorMessage } from "./lib/api";
 import type { UserRoomBinding } from "./lib/types";
-import { AdminApp } from "./components/AdminApp";
 import { AuthPanel } from "./components/AuthPanel";
 import { AppShell, type ViewKey } from "./components/AppShell";
-import { DashboardView, type ChartRangeState } from "./components/DashboardView";
+import type { ChartRangeState } from "./components/DashboardView";
 import { NoticeDialog } from "./components/NoticeDialog";
-import { RecordsView } from "./components/RecordsView";
-import { RoomsView } from "./components/RoomsView";
-import { SettingsView } from "./components/SettingsView";
+
+const AdminApp = lazy(() => import("./components/AdminApp").then((module) => ({ default: module.AdminApp })));
+const DashboardView = lazy(() =>
+  import("./components/DashboardView").then((module) => ({ default: module.DashboardView }))
+);
+const RecordsView = lazy(() => import("./components/RecordsView").then((module) => ({ default: module.RecordsView })));
+const RoomsView = lazy(() => import("./components/RoomsView").then((module) => ({ default: module.RoomsView })));
+const SettingsView = lazy(() =>
+  import("./components/SettingsView").then((module) => ({ default: module.SettingsView }))
+);
 
 const TOKEN_KEY = "sdu-electricity-token";
 const THEME_KEY = "sdu-electricity-theme";
@@ -90,11 +96,7 @@ function buildChartParams(range: ChartRangeState) {
   return { limit: 5000 };
 }
 
-export default function App() {
-  if (window.location.pathname.startsWith("/admin")) {
-    return <AdminApp />;
-  }
-
+function UserApp() {
   const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(() => readStoredToken());
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
@@ -257,6 +259,17 @@ export default function App() {
     onError: (error) => setNotice(describeError(error))
   });
 
+  const updatePasswordMutation = useMutation({
+    mutationFn: api.updatePassword,
+    onSuccess: (result) => {
+      window.localStorage.setItem(TOKEN_KEY, result.access_token);
+      setToken(result.access_token);
+      queryClient.setQueryData(["me"], result.user);
+      setNotice("密码已更新，其他旧登录会话已经失效。");
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
   const deleteAccountMutation = useMutation({
     mutationFn: api.deleteAccount,
     onSuccess: () => {
@@ -319,63 +332,88 @@ export default function App() {
     >
       <NoticeDialog message={notice} onClose={() => setNotice(null)} />
 
-      {activeView === "dashboard" ? (
-        <DashboardView
-          summaries={summaries}
-          selectedBindingId={selectedChartBindingId}
-          chartReadings={chartReadingsQuery.data ?? []}
-          chartLoading={chartReadingsQuery.isLoading}
-          chartRange={chartRange}
-          loading={summariesQuery.isLoading}
-          checkingId={checkingId}
-          onSelectBinding={setSelectedChartBindingId}
-          onChangeChartRange={setChartRange}
-          onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
-          onGoRooms={() => setActiveView("rooms")}
-        />
-      ) : null}
+      <Suspense fallback={<ViewLoading />}>
+        {activeView === "dashboard" ? (
+          <DashboardView
+            summaries={summaries}
+            selectedBindingId={selectedChartBindingId}
+            chartReadings={chartReadingsQuery.data ?? []}
+            chartLoading={chartReadingsQuery.isLoading}
+            chartRange={chartRange}
+            loading={summariesQuery.isLoading}
+            checkingId={checkingId}
+            onSelectBinding={setSelectedChartBindingId}
+            onChangeChartRange={setChartRange}
+            onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
+            onGoRooms={() => setActiveView("rooms")}
+          />
+        ) : null}
 
-      {activeView === "rooms" ? (
-        <RoomsView
-          buildings={buildings}
-          bindings={bindings}
-          loading={bindingsQuery.isLoading || buildingsQuery.isLoading}
-          saving={bindMutation.isPending}
-          updatingId={updatingId}
-          checkingId={checkingId}
-          manualCheckAvailableAtByBinding={manualCheckAvailableAtByBinding}
-          onBindRoom={(payload) => bindMutation.mutate(payload)}
-          onUpdateRoom={(bindingId, payload) => updateMutation.mutate({ id: bindingId, payload })}
-          onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
-          onToggleRoom={toggleBinding}
-          onDeleteRoom={(bindingId) => deleteMutation.mutate(bindingId)}
-        />
-      ) : null}
+        {activeView === "rooms" ? (
+          <RoomsView
+            buildings={buildings}
+            bindings={bindings}
+            loading={bindingsQuery.isLoading || buildingsQuery.isLoading}
+            saving={bindMutation.isPending}
+            updatingId={updatingId}
+            checkingId={checkingId}
+            manualCheckAvailableAtByBinding={manualCheckAvailableAtByBinding}
+            onBindRoom={(payload) => bindMutation.mutate(payload)}
+            onUpdateRoom={(bindingId, payload) => updateMutation.mutate({ id: bindingId, payload })}
+            onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
+            onToggleRoom={toggleBinding}
+            onDeleteRoom={(bindingId) => deleteMutation.mutate(bindingId)}
+          />
+        ) : null}
 
-      {activeView === "records" ? <RecordsView attempts={attempts} loading={attemptsQuery.isLoading} /> : null}
+        {activeView === "records" ? <RecordsView attempts={attempts} loading={attemptsQuery.isLoading} /> : null}
 
-      {activeView === "settings" ? (
-        <SettingsView
-          user={meQuery.data}
-          bindings={bindings}
-          loading={bindingsQuery.isLoading}
-          updatingId={updatingId}
-          requestingEmail={requestNotificationEmailMutation.isPending}
-          verifyingEmail={verifyNotificationEmailMutation.isPending}
-          notificationEmailCode={notificationEmailCode}
-          minimumManualCheckCooldownSeconds={runtimeLimitsQuery.data?.manual_check_cooldown_seconds}
-          minimumNotifyCooldownHours={runtimeLimitsQuery.data?.notify_cooldown_hours}
-          updatingPreferences={updatePreferencesMutation.isPending}
-          sendingTestEmail={testEmailMutation.isPending}
-          deletingAccount={deleteAccountMutation.isPending}
-          onUpdateBinding={updateBindingSettings}
-          onUpdatePreferences={(payload) => updatePreferencesMutation.mutate(payload)}
-          onSendTestEmail={() => testEmailMutation.mutate()}
-          onDeleteAccount={(password) => deleteAccountMutation.mutate({ password })}
-          onRequestNotificationEmail={(email) => requestNotificationEmailMutation.mutate({ email })}
-          onVerifyNotificationEmail={(email, code) => verifyNotificationEmailMutation.mutate({ email, code })}
-        />
-      ) : null}
+        {activeView === "settings" ? (
+          <SettingsView
+            user={meQuery.data}
+            bindings={bindings}
+            loading={bindingsQuery.isLoading}
+            updatingId={updatingId}
+            requestingEmail={requestNotificationEmailMutation.isPending}
+            verifyingEmail={verifyNotificationEmailMutation.isPending}
+            notificationEmailCode={notificationEmailCode}
+            minimumManualCheckCooldownSeconds={runtimeLimitsQuery.data?.manual_check_cooldown_seconds}
+            minimumNotifyCooldownHours={runtimeLimitsQuery.data?.notify_cooldown_hours}
+            updatingPreferences={updatePreferencesMutation.isPending}
+            sendingTestEmail={testEmailMutation.isPending}
+            updatingPassword={updatePasswordMutation.isPending}
+            deletingAccount={deleteAccountMutation.isPending}
+            onUpdateBinding={updateBindingSettings}
+            onUpdatePreferences={(payload) => updatePreferencesMutation.mutate(payload)}
+            onSendTestEmail={() => testEmailMutation.mutate()}
+            onUpdatePassword={(oldPassword, newPassword) =>
+              updatePasswordMutation.mutate({ old_password: oldPassword, new_password: newPassword })
+            }
+            onDeleteAccount={(password) => deleteAccountMutation.mutate({ password })}
+            onRequestNotificationEmail={(email) => requestNotificationEmailMutation.mutate({ email })}
+            onVerifyNotificationEmail={(email, code) => verifyNotificationEmailMutation.mutate({ email, code })}
+          />
+        ) : null}
+      </Suspense>
     </AppShell>
   );
+}
+
+function ViewLoading() {
+  return (
+    <div className="flex min-h-48 items-center justify-center" role="status" aria-label="正在加载页面">
+      <span className="h-7 w-7 animate-spin rounded-full border-2 border-border border-t-primary" />
+    </div>
+  );
+}
+
+export default function App() {
+  if (window.location.pathname.startsWith("/admin")) {
+    return (
+      <Suspense fallback={<ViewLoading />}>
+        <AdminApp />
+      </Suspense>
+    );
+  }
+  return <UserApp />;
 }

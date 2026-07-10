@@ -40,14 +40,14 @@ class AdminTokenOut(BaseModel):
 
 class AdminAuthTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    token_value: str = Field(min_length=10)
+    token_value: str = Field(min_length=10, max_length=8192)
     min_interval_seconds: int = Field(default=10, ge=0, le=3600)
     enabled: bool = True
 
 
 class AdminAuthTokenUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
-    token_value: str | None = Field(default=None, min_length=10)
+    token_value: str | None = Field(default=None, min_length=10, max_length=8192)
     min_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     enabled: bool | None = None
 
@@ -97,7 +97,7 @@ class SmtpSettingsCreate(BaseModel):
     host: str = Field(min_length=1, max_length=255)
     port: int = Field(default=465, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
-    password: str | None = Field(default=None, max_length=512)
+    password: str | None = Field(default=None, max_length=255)
     from_email: str = Field(min_length=3, max_length=255)
     enabled: bool = True
     min_interval_seconds: int = Field(default=0, ge=0, le=3600)
@@ -110,7 +110,7 @@ class SmtpSettingsUpdate(BaseModel):
     host: str | None = Field(default=None, min_length=1, max_length=255)
     port: int | None = Field(default=None, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
-    password: str | None = Field(default=None, max_length=512)
+    password: str | None = Field(default=None, max_length=255)
     from_email: str | None = Field(default=None, min_length=3, max_length=255)
     enabled: bool | None = None
     min_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
@@ -272,7 +272,7 @@ class AdminManagedUserUpdate(BaseModel):
 class AdminManagedUserRoomUpdate(BaseModel):
     alert_days: int | None = Field(default=None, ge=1, le=30)
     alert_threshold_mode: str | None = Field(default=None, pattern="^(days|average|fixed)$")
-    low_power_threshold: Decimal | None = Field(default=None, ge=0)
+    low_power_threshold: Decimal | None = Field(default=None, ge=0, le=100_000, max_digits=8, decimal_places=2)
     manual_check_cooldown_seconds: int | None = Field(default=None, ge=0, le=60 * 60)
     notify_cooldown_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     enabled: bool | None = None

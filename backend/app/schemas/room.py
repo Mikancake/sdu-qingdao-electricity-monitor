@@ -7,11 +7,11 @@ from app.schemas.reading import RecentReadingOut
 
 
 class RoomCreate(BaseModel):
-    campus: str = "\u9752\u5c9b\u6821\u533a"
-    campus_param: str = "\u9752\u5c9b\u6821\u533a&\u9752\u5c9b\u6821\u533a"
-    building_key: str | None = None
-    building_name: str | None = Field(default=None, max_length=120)
-    building_param: str | None = Field(default=None, max_length=180)
+    campus: str = Field(default="\u9752\u5c9b\u6821\u533a", min_length=1, max_length=80)
+    campus_param: str = Field(default="\u9752\u5c9b\u6821\u533a&\u9752\u5c9b\u6821\u533a", min_length=1, max_length=160)
+    building_key: str | None = Field(default=None, max_length=80)
+    building_name: str | None = Field(default=None, min_length=1, max_length=120)
+    building_param: str | None = Field(default=None, min_length=1, max_length=180)
     room_number: str = Field(min_length=1, max_length=40)
 
 

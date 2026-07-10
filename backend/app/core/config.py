@@ -1,4 +1,5 @@
 from functools import lru_cache
+from ipaddress import ip_network
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,8 +9,15 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Electricity Monitor", validation_alias="APP_NAME")
     debug: bool = Field(default=False, validation_alias="APP_DEBUG")
     secret_key: str = Field(default="dev-secret-change-me-before-deploy", validation_alias="SECRET_KEY")
+    credential_encryption_key: str | None = Field(default=None, validation_alias="CREDENTIAL_ENCRYPTION_KEY")
+    credential_encryption_old_keys: str = Field(default="", validation_alias="CREDENTIAL_ENCRYPTION_OLD_KEYS")
     allow_insecure_startup: bool = Field(default=False, validation_alias="ALLOW_INSECURE_STARTUP")
-    access_token_expire_minutes: int = Field(default=60 * 24 * 7, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    access_token_expire_minutes: int = Field(
+        default=60 * 24 * 7,
+        ge=5,
+        le=60 * 24 * 30,
+        validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES",
+    )
     initial_admin_username: str | None = Field(default=None, validation_alias="INITIAL_ADMIN_USERNAME")
     initial_admin_password: str | None = Field(default=None, validation_alias="INITIAL_ADMIN_PASSWORD")
     initial_admin_display_name: str | None = Field(default=None, validation_alias="INITIAL_ADMIN_DISPLAY_NAME")
@@ -23,6 +31,12 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:5173,http://localhost:5173",
         validation_alias="CORS_ORIGINS",
     )
+    trusted_hosts: str = Field(default="", validation_alias="TRUSTED_HOSTS")
+    trusted_proxy_cidrs: str = Field(
+        default="127.0.0.1/32,::1/128",
+        validation_alias="TRUSTED_PROXY_CIDRS",
+    )
+    security_headers_enabled: bool = Field(default=True, validation_alias="SECURITY_HEADERS_ENABLED")
 
     electricity_api_url: str = Field(
         default="https://mcard.sdu.edu.cn/charge/feeitem/getThirdData",
@@ -50,7 +64,18 @@ class Settings(BaseSettings):
     admin_audit_log_retention_days: int = Field(default=365, validation_alias="ADMIN_AUDIT_LOG_RETENTION_DAYS")
     retention_cleanup_hour: int = Field(default=3, validation_alias="RETENTION_CLEANUP_HOUR")
     upload_dir: str = Field(default="./uploads", validation_alias="UPLOAD_DIR")
-    appearance_upload_max_bytes: int = Field(default=5 * 1024 * 1024, validation_alias="APPEARANCE_UPLOAD_MAX_BYTES")
+    appearance_upload_max_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        ge=64 * 1024,
+        le=100 * 1024 * 1024,
+        validation_alias="APPEARANCE_UPLOAD_MAX_BYTES",
+    )
+    max_request_body_bytes: int = Field(
+        default=1024 * 1024,
+        ge=16 * 1024,
+        le=10 * 1024 * 1024,
+        validation_alias="MAX_REQUEST_BODY_BYTES",
+    )
 
     smtp_host: str | None = Field(default=None, validation_alias="SMTP_HOST")
     smtp_port: int = Field(default=465, validation_alias="SMTP_PORT")
@@ -82,7 +107,27 @@ def validate_runtime_safety() -> None:
     }
     if settings.secret_key in insecure_secret_values or len(settings.secret_key) < 32:
         raise RuntimeError("SECRET_KEY must be changed to a random value of at least 32 characters when APP_DEBUG=false")
+    if not settings.credential_encryption_key or len(settings.credential_encryption_key) < 32:
+        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be a random value of at least 32 characters when APP_DEBUG=false")
+
+    database_url_lower = settings.database_url.lower()
+    if "change-this" in database_url_lower or "change_this" in database_url_lower:
+        raise RuntimeError("DATABASE_URL still contains a placeholder password when APP_DEBUG=false")
+
+    if settings.smtp_username and not settings.smtp_use_ssl and not settings.smtp_use_starttls:
+        raise RuntimeError("SMTP credentials require SMTP_USE_SSL=true or SMTP_USE_STARTTLS=true")
 
     origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
     if "*" in origins:
         raise RuntimeError("CORS_ORIGINS must not include '*' when APP_DEBUG=false")
+
+    trusted_hosts = [host.strip() for host in settings.trusted_hosts.split(",") if host.strip()]
+    if "*" in trusted_hosts:
+        raise RuntimeError("TRUSTED_HOSTS must not include '*' when APP_DEBUG=false")
+
+    try:
+        for value in settings.trusted_proxy_cidrs.split(","):
+            if value.strip():
+                ip_network(value.strip(), strict=False)
+    except ValueError as exc:
+        raise RuntimeError("TRUSTED_PROXY_CIDRS contains an invalid IP address or network") from exc

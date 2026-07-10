@@ -34,10 +34,12 @@ interface SettingsViewProps {
   minimumNotifyCooldownHours?: number | null;
   updatingPreferences: boolean;
   sendingTestEmail: boolean;
+  updatingPassword: boolean;
   deletingAccount: boolean;
   onUpdateBinding: (binding: UserRoomBinding, payload: BindingUpdatePayload) => void;
   onUpdatePreferences: (payload: UserPreferencesPayload) => void;
   onSendTestEmail: () => void;
+  onUpdatePassword: (oldPassword: string, newPassword: string) => void;
   onDeleteAccount: (password: string) => void;
   onRequestNotificationEmail: (email: string) => void;
   onVerifyNotificationEmail: (email: string, code: string) => void;
@@ -258,10 +260,12 @@ export function SettingsView({
   minimumNotifyCooldownHours,
   updatingPreferences,
   sendingTestEmail,
+  updatingPassword,
   deletingAccount,
   onUpdateBinding,
   onUpdatePreferences,
   onSendTestEmail,
+  onUpdatePassword,
   onDeleteAccount,
   onRequestNotificationEmail,
   onVerifyNotificationEmail
@@ -272,6 +276,9 @@ export function SettingsView({
   const [dailyReportEnabled, setDailyReportEnabled] = useState(user?.daily_report_enabled ?? true);
   const [dailyReportIntervalDays, setDailyReportIntervalDays] = useState(String(user?.daily_report_interval_days ?? 1));
   const [userNotifyCooldownTouched, setUserNotifyCooldownTouched] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
 
   useEffect(() => {
@@ -448,6 +455,69 @@ export function SettingsView({
               保存
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <KeyRound size={18} />
+          </div>
+          <div>
+            <CardTitle>修改密码</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">保存后会立即使其他设备上的旧登录会话失效。</p>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
+          <div>
+            <Label htmlFor="current-password">当前密码</Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="new-password">新密码</Label>
+            <Input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+            <div className={newPassword.length > 0 && newPassword.length < 8 ? "mt-1 text-xs text-danger" : "mt-1 text-xs text-muted-foreground"}>
+              {newPassword.length > 0 && newPassword.length < 8 ? "至少需要 8 个字符" : "使用与其他网站不同的密码"}
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="confirm-password">确认新密码</Label>
+            <Input
+              id="confirm-password"
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+            {confirmPassword && confirmPassword !== newPassword ? <div className="mt-1 text-xs text-danger">两次输入的密码不一致</div> : null}
+          </div>
+          <Button
+            className="lg:mb-[1px] lg:w-[104px]"
+            disabled={
+              updatingPassword ||
+              currentPassword.length === 0 ||
+              newPassword.length < 8 ||
+              newPassword === currentPassword ||
+              confirmPassword !== newPassword
+            }
+            onClick={() => onUpdatePassword(currentPassword, newPassword)}
+            variant="secondary"
+          >
+            {updatingPassword ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存
+          </Button>
         </CardContent>
       </Card>
 

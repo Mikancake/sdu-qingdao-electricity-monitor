@@ -1,40 +1,29 @@
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Literal
-from uuid import uuid4
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
-from sqlalchemy import func, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
-from app.core.config import settings
+from app.api.routes import admin_appearance, admin_logs, admin_status
+from app.api.routes.admin_common import audit, next_smtp_id, smtp_out, token_out
 from app.api.routes.auth import ensure_email_shape, normalize_email
-from app.core.security import hash_password, sign_access_token, verify_password
+from app.core.security import DUMMY_PASSWORD_HASH, hash_password, password_needs_rehash, sign_access_token, verify_password
 from app.electricity.client import CampusElectricityClient
-from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_user import AdminUser
 from app.models.auth_token import AuthToken
-from app.models.auth_token_health_log import AuthTokenHealthLog
-from app.models.email_delivery_log import EmailDeliveryLog
-from app.models.electricity_reading import ElectricityReading
-from app.models.notification import Notification
 from app.models.room import Room
-from app.models.smtp_health_log import SmtpHealthLog
 from app.models.smtp_settings import SmtpSettings
 from app.models.user import User
 from app.models.user_room import UserRoom
 from app.schemas.admin import (
     AdminAuthTokenCreate,
-    AdminAuthTokenHealthLogOut,
     AdminAuthTokenOut,
     AdminAuthTokenUpdate,
     AdminHealthTestOut,
     AdminRoomBindingOut,
     AdminRoomOut,
-    AdminAuditLogOut,
     AdminTokenHealthTestRequest,
     AdminLogin,
     AdminManagedUserDetailOut,
@@ -43,7 +32,6 @@ from app.schemas.admin import (
     AdminManagedUserUpdate,
     AdminPasswordUpdate,
     AdminProfileUpdate,
-    AdminStatusOut,
     AdminTokenOut,
     AdminUserOut,
     DataRetentionCleanupOut,
@@ -51,20 +39,17 @@ from app.schemas.admin import (
     RateLimitClearRequest,
     RuntimeSettingsOut,
     RuntimeSettingsUpdate,
-    SmtpHealthLogOut,
     SmtpSettingsCreate,
     SmtpSettingsOut,
     SmtpSettingsUpdate,
     SmtpTestRequest,
 )
-from app.schemas.appearance import AppearanceBackgroundUploadOut, AppearanceSettingsOut, AppearanceSettingsUpdate
 from app.schemas.binding import UserRoomOut
 from app.services.admins import normalize_username
-from app.services.appearance import get_appearance_settings, update_appearance_settings
 from app.services.data_retention import cleanup_data_retention
-from app.services.emailer import send_email, smtp_configured
+from app.services.emailer import send_email
 from app.services.notifications import run_low_power_notifications
-from app.services.rate_limit import enforce_rate_limit, limiter, rate_limit_key
+from app.services.rate_limit import account_rate_limit_key, client_rate_limit_key, enforce_rate_limit, limiter
 from app.services.room_checks import run_room_checks
 from app.services.runtime_settings import get_runtime_config, update_runtime_config
 from app.services.token_health import record_token_health
@@ -72,109 +57,30 @@ from app.services.users import delete_user_account
 
 
 router = APIRouter()
-ALLOWED_APPEARANCE_IMAGE_TYPES = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/avif": ".avif",
-}
-
-
-def audit(db: Session, admin: AdminUser, action: str, target_type: str, target_id: object | None, detail: dict | None = None) -> None:
-    db.add(
-        AdminAuditLog(
-            admin_id=admin.id,
-            action=action,
-            target_type=target_type,
-            target_id=str(target_id) if target_id is not None else None,
-            detail=json.dumps(detail or {}, ensure_ascii=False),
-        )
-    )
-
-
-def _preview_secret(value: str, *, head: int = 6, tail: int = 4) -> str:
-    if len(value) <= head + tail:
-        return "*" * len(value)
-    return f"{value[:head]}...{value[-tail:]}"
-
-
-def _log_since(days: int) -> datetime:
-    return datetime.now() - timedelta(days=days)
-
-
-def _search_pattern(q: str | None) -> str | None:
-    value = (q or "").strip()
-    return f"%{value}%" if value else None
-
-
-def _log_order(model: object, sort: Literal["asc", "desc"]):
-    if sort == "asc":
-        return (model.created_at.asc(), model.id.asc())
-    return (model.created_at.desc(), model.id.desc())
-
-
-def _token_out(token: AuthToken) -> AdminAuthTokenOut:
-    return AdminAuthTokenOut(
-        id=token.id,
-        name=token.name,
-        token_preview=_preview_secret(token.token_value),
-        enabled=token.enabled,
-        min_interval_seconds=token.min_interval_seconds,
-        last_used_at=token.last_used_at,
-        health_status=token.health_status or "unknown",
-        failure_count=token.failure_count or 0,
-        last_checked_at=token.last_checked_at,
-        last_success_at=token.last_success_at,
-        last_error_at=token.last_error_at,
-        last_error_kind=token.last_error_kind,
-        last_error_msg=token.last_error_msg,
-        created_at=token.created_at,
-    )
-
-
-def _smtp_out(row: SmtpSettings) -> SmtpSettingsOut:
-    return SmtpSettingsOut(
-        id=row.id,
-        name=row.name or f"smtp-{row.id}",
-        configured=bool(row.host and row.from_email),
-        host=row.host,
-        port=row.port,
-        username=row.username,
-        from_email=row.from_email,
-        enabled=row.enabled,
-        min_interval_seconds=row.min_interval_seconds or 0,
-        use_ssl=row.use_ssl,
-        use_starttls=row.use_starttls,
-        password_configured=bool(row.password),
-        last_used_at=row.last_used_at,
-        health_status=row.health_status or "unknown",
-        failure_count=row.failure_count or 0,
-        last_checked_at=row.last_checked_at,
-        last_success_at=row.last_success_at,
-        last_error_at=row.last_error_at,
-        last_error_kind=row.last_error_kind,
-        last_error_msg=row.last_error_msg,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
-
-
-def _next_smtp_id(db: Session) -> int:
-    current_max = db.scalar(select(func.max(SmtpSettings.id))) or 0
-    return int(current_max) + 1
+router.include_router(admin_appearance.router)
+router.include_router(admin_logs.router)
+router.include_router(admin_status.router)
 
 
 @router.post("/auth/login", response_model=AdminTokenOut)
 def admin_login(request: Request, payload: AdminLogin, db: Session = Depends(db_session)) -> AdminTokenOut:
     username = normalize_username(payload.username)
-    enforce_rate_limit(rate_limit_key(request, "admin:login", username), limit=8, window_seconds=10 * 60)
+    enforce_rate_limit(client_rate_limit_key(request, "admin:login"), limit=30, window_seconds=10 * 60)
+    enforce_rate_limit(account_rate_limit_key("admin:login", username), limit=8, window_seconds=10 * 60)
     admin = db.scalar(select(AdminUser).where(AdminUser.username == username))
-    if admin is None or not admin.enabled or not verify_password(payload.password, admin.password_hash):
+    password_hash = admin.password_hash if admin is not None else DUMMY_PASSWORD_HASH
+    password_valid = verify_password(payload.password, password_hash)
+    if admin is None or not admin.enabled or not password_valid:
         raise HTTPException(status_code=401, detail="invalid username or password")
+    if password_needs_rehash(admin.password_hash):
+        admin.password_hash = hash_password(payload.password)
     admin.last_login_at = datetime.now()
     db.commit()
     db.refresh(admin)
-    return AdminTokenOut(access_token=sign_access_token(admin.id, kind="admin"), admin=admin)
+    return AdminTokenOut(
+        access_token=sign_access_token(admin.id, kind="admin", password_hash=admin.password_hash),
+        admin=admin,
+    )
 
 
 @router.get("/auth/me", response_model=AdminUserOut)
@@ -196,18 +102,27 @@ def update_admin_profile(
     return admin
 
 
-@router.post("/auth/password")
+@router.post("/auth/password", response_model=AdminTokenOut)
 def update_admin_password(
+    request: Request,
     payload: AdminPasswordUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
-) -> dict[str, str]:
+) -> AdminTokenOut:
+    enforce_rate_limit(client_rate_limit_key(request, "admin:password"), limit=20, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("admin:password", admin.username), limit=5, window_seconds=60 * 60)
     if not verify_password(payload.old_password, admin.password_hash):
         raise HTTPException(status_code=400, detail="old password is incorrect")
+    if payload.new_password == payload.old_password:
+        raise HTTPException(status_code=422, detail="new password must be different")
     admin.password_hash = hash_password(payload.new_password)
     audit(db, admin, "update_admin_password", "admin_user", admin.id)
     db.commit()
-    return {"status": "updated"}
+    db.refresh(admin)
+    return AdminTokenOut(
+        access_token=sign_access_token(admin.id, kind="admin", password_hash=admin.password_hash),
+        admin=admin,
+    )
 
 
 def _managed_user_out(db: Session, user: User) -> AdminManagedUserOut:
@@ -421,57 +336,7 @@ def list_tokens(
     db: Session = Depends(db_session),
 ) -> list[AdminAuthTokenOut]:
     tokens = db.scalars(select(AuthToken).order_by(AuthToken.id))
-    return [_token_out(token) for token in tokens]
-
-
-@router.get("/tokens/health-logs", response_model=list[AdminAuthTokenHealthLogOut])
-def list_token_health_logs(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-    days: int = Query(7, ge=0, le=365),
-    limit: int = Query(200, ge=0, le=1000),
-    q: str | None = Query(None, max_length=120),
-    sort: Literal["asc", "desc"] = Query("desc"),
-) -> list[AdminAuthTokenHealthLogOut]:
-    stmt = select(AuthTokenHealthLog, AuthToken).outerjoin(
-        AuthToken, AuthToken.id == AuthTokenHealthLog.auth_token_id
-    )
-    if days:
-        stmt = stmt.where(AuthTokenHealthLog.created_at >= _log_since(days))
-    pattern = _search_pattern(q)
-    if pattern:
-        stmt = stmt.where(
-            or_(
-                AuthToken.name.ilike(pattern),
-                AuthTokenHealthLog.source.ilike(pattern),
-                AuthTokenHealthLog.error_kind.ilike(pattern),
-                AuthTokenHealthLog.error_msg.ilike(pattern),
-                AuthTokenHealthLog.health_status.ilike(pattern),
-            )
-        )
-    stmt = stmt.order_by(*_log_order(AuthTokenHealthLog, sort))
-    if limit:
-        stmt = stmt.limit(limit)
-    rows = list(
-        db.execute(
-            stmt
-        ).all()
-    )
-    return [
-        AdminAuthTokenHealthLogOut(
-            id=log.id,
-            token_id=log.auth_token_id,
-            token_name=token.name if token else None,
-            source=log.source,
-            success=log.success,
-            error_kind=log.error_kind,
-            error_msg=log.error_msg,
-            health_status=log.health_status,
-            failure_count=log.failure_count,
-            created_at=log.created_at,
-        )
-        for log, token in rows
-    ]
+    return [token_out(token) for token in tokens]
 
 
 @router.post("/tokens", response_model=AdminAuthTokenOut, status_code=status.HTTP_201_CREATED)
@@ -495,7 +360,7 @@ def create_token(
         db.rollback()
         raise HTTPException(status_code=409, detail="token name already exists") from exc
     db.refresh(token)
-    return _token_out(token)
+    return token_out(token)
 
 
 @router.patch("/tokens/{token_id}", response_model=AdminAuthTokenOut)
@@ -530,7 +395,7 @@ def update_token(
         db.rollback()
         raise HTTPException(status_code=409, detail="token name already exists") from exc
     db.refresh(token)
-    return _token_out(token)
+    return token_out(token)
 
 
 @router.post("/tokens/{token_id}/test", response_model=AdminHealthTestOut)
@@ -586,59 +451,7 @@ def list_smtp_settings(
     db: Session = Depends(db_session),
 ) -> list[SmtpSettingsOut]:
     rows = db.scalars(select(SmtpSettings).order_by(SmtpSettings.id))
-    return [_smtp_out(row) for row in rows]
-
-
-@router.get("/smtp/health-logs", response_model=list[SmtpHealthLogOut])
-def list_smtp_health_logs(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-    days: int = Query(7, ge=0, le=365),
-    limit: int = Query(200, ge=0, le=1000),
-    q: str | None = Query(None, max_length=120),
-    sort: Literal["asc", "desc"] = Query("desc"),
-) -> list[SmtpHealthLogOut]:
-    stmt = select(SmtpHealthLog, SmtpSettings).outerjoin(
-        SmtpSettings, SmtpSettings.id == SmtpHealthLog.smtp_settings_id
-    )
-    if days:
-        stmt = stmt.where(SmtpHealthLog.created_at >= _log_since(days))
-    pattern = _search_pattern(q)
-    if pattern:
-        stmt = stmt.where(
-            or_(
-                SmtpSettings.name.ilike(pattern),
-                SmtpHealthLog.source.ilike(pattern),
-                SmtpHealthLog.recipient_email.ilike(pattern),
-                SmtpHealthLog.error_kind.ilike(pattern),
-                SmtpHealthLog.error_msg.ilike(pattern),
-                SmtpHealthLog.health_status.ilike(pattern),
-            )
-        )
-    stmt = stmt.order_by(*_log_order(SmtpHealthLog, sort))
-    if limit:
-        stmt = stmt.limit(limit)
-    rows = list(
-        db.execute(
-            stmt
-        ).all()
-    )
-    return [
-        SmtpHealthLogOut(
-            id=log.id,
-            smtp_id=log.smtp_settings_id,
-            smtp_name=smtp.name if smtp else None,
-            source=log.source,
-            recipient_email=log.recipient_email,
-            success=log.success,
-            error_kind=log.error_kind,
-            error_msg=log.error_msg,
-            health_status=log.health_status,
-            failure_count=log.failure_count,
-            created_at=log.created_at,
-        )
-        for log, smtp in rows
-    ]
+    return [smtp_out(row) for row in rows]
 
 
 @router.post("/smtp", response_model=SmtpSettingsOut, status_code=status.HTTP_201_CREATED)
@@ -648,7 +461,7 @@ def create_smtp_settings(
     db: Session = Depends(db_session),
 ) -> SmtpSettingsOut:
     row = SmtpSettings(
-        id=_next_smtp_id(db),
+        id=next_smtp_id(db),
         name=payload.name.strip(),
         host=payload.host.strip(),
         port=payload.port,
@@ -669,7 +482,7 @@ def create_smtp_settings(
         db.rollback()
         raise HTTPException(status_code=409, detail="smtp account could not be created, please retry") from exc
     db.refresh(row)
-    return _smtp_out(row)
+    return smtp_out(row)
 
 
 @router.patch("/smtp/{smtp_id}", response_model=SmtpSettingsOut)
@@ -712,7 +525,7 @@ def update_smtp_settings(
     )
     db.commit()
     db.refresh(row)
-    return _smtp_out(row)
+    return smtp_out(row)
 
 
 @router.delete("/smtp/{smtp_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -758,63 +571,6 @@ def test_one_smtp_settings(
     return {"status": "sent"}
 
 
-@router.get("/appearance", response_model=AppearanceSettingsOut)
-def get_admin_appearance_settings(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-) -> AppearanceSettingsOut:
-    return get_appearance_settings(db)
-
-
-@router.patch("/appearance", response_model=AppearanceSettingsOut)
-def patch_admin_appearance_settings(
-    payload: AppearanceSettingsUpdate,
-    admin: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-) -> AppearanceSettingsOut:
-    settings = update_appearance_settings(db, payload.model_dump(exclude_unset=True))
-    audit(db, admin, "update_appearance_settings", "app_settings", "appearance_settings", {"fields": list(payload.model_fields_set)})
-    db.commit()
-    return settings
-
-
-@router.post("/appearance/background", response_model=AppearanceBackgroundUploadOut)
-async def upload_appearance_background(
-    theme: Literal["light", "dark"] = Form(default="light"),
-    file: UploadFile = File(...),
-    admin: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-) -> AppearanceBackgroundUploadOut:
-    suffix = ALLOWED_APPEARANCE_IMAGE_TYPES.get(file.content_type or "")
-    if suffix is None:
-        raise HTTPException(status_code=400, detail="only jpg, png, webp, and avif images are supported")
-
-    upload_root = Path(settings.upload_dir) / "appearance"
-    upload_root.mkdir(parents=True, exist_ok=True)
-    filename = f"{theme}-{uuid4().hex}{suffix}"
-    target = upload_root / filename
-
-    written = 0
-    try:
-        with target.open("wb") as handle:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > settings.appearance_upload_max_bytes:
-                    raise HTTPException(status_code=413, detail="image is too large")
-                handle.write(chunk)
-    except Exception:
-        if target.exists():
-            target.unlink()
-        raise
-    finally:
-        await file.close()
-
-    url = f"/uploads/appearance/{filename}"
-    audit(db, admin, "upload_appearance_background", "app_settings", "appearance_settings", {"theme": theme, "url": url})
-    db.commit()
-    return AppearanceBackgroundUploadOut(theme=theme, url=url)
-
-
 @router.get("/settings", response_model=RuntimeSettingsOut)
 def get_runtime_settings(
     _: AdminUser = Depends(current_admin),
@@ -833,119 +589,6 @@ def patch_runtime_settings(
     audit(db, admin, "update_runtime_settings", "app_settings", None, {"fields": list(payload.model_fields_set)})
     db.commit()
     return RuntimeSettingsOut(**runtime.__dict__)
-
-
-@router.get("/status", response_model=AdminStatusOut)
-def get_admin_status(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-) -> AdminStatusOut:
-    token_count = db.scalar(select(func.count(AuthToken.id))) or 0
-    enabled_token_count = db.scalar(select(func.count(AuthToken.id)).where(AuthToken.enabled.is_(True))) or 0
-    unhealthy_token_count = db.scalar(
-        select(func.count(AuthToken.id)).where(AuthToken.health_status.in_(["warning", "invalid"]))
-    ) or 0
-    smtp_count = db.scalar(select(func.count(SmtpSettings.id))) or 0
-    enabled_smtp_count = db.scalar(select(func.count(SmtpSettings.id)).where(SmtpSettings.enabled.is_(True))) or 0
-    unhealthy_smtp_count = db.scalar(
-        select(func.count(SmtpSettings.id)).where(SmtpSettings.health_status.in_(["warning", "invalid"]))
-    ) or 0
-    pending_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "pending")) or 0
-    failed_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "error")) or 0
-    sent_notifications = db.scalar(select(func.count(Notification.id)).where(Notification.status == "sent")) or 0
-    total_notifications = db.scalar(select(func.count(Notification.id))) or 0
-    recent_cutoff = datetime.now() - timedelta(hours=24)
-    recent_sent_notifications = db.scalar(
-        select(func.count(Notification.id)).where(Notification.status == "sent", Notification.sent_at >= recent_cutoff)
-    ) or 0
-    recent_failed_notifications = db.scalar(
-        select(func.count(Notification.id)).where(Notification.status == "error", Notification.created_at >= recent_cutoff)
-    ) or 0
-    daily_report_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.source == "daily_report", EmailDeliveryLog.status == "sent")
-    ) or 0
-    total_daily_report_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.source == "daily_report")
-    ) or 0
-    recent_daily_report_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(
-            EmailDeliveryLog.source == "daily_report",
-            EmailDeliveryLog.status == "sent",
-            EmailDeliveryLog.sent_at >= recent_cutoff,
-        )
-    ) or 0
-    recent_failed_daily_report_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(
-            EmailDeliveryLog.source == "daily_report",
-            EmailDeliveryLog.status == "error",
-            EmailDeliveryLog.created_at >= recent_cutoff,
-        )
-    ) or 0
-    all_sent_emails = db.scalar(select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "sent")) or 0
-    all_total_emails = db.scalar(select(func.count(EmailDeliveryLog.id))) or 0
-    recent_sent_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "sent", EmailDeliveryLog.sent_at >= recent_cutoff)
-    ) or 0
-    recent_failed_emails = db.scalar(
-        select(func.count(EmailDeliveryLog.id)).where(EmailDeliveryLog.status == "error", EmailDeliveryLog.created_at >= recent_cutoff)
-    ) or 0
-    total_rooms = db.scalar(select(func.count(func.distinct(UserRoom.room_id)))) or 0
-    active_bindings = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.enabled.is_(True))) or 0
-    total_users = db.scalar(select(func.count(User.id))) or 0
-    verified_users = db.scalar(select(func.count(User.id)).where(User.is_verified.is_(True))) or 0
-    latest_read_at = db.scalar(select(ElectricityReading.read_at).order_by(ElectricityReading.read_at.desc()).limit(1))
-    return AdminStatusOut(
-        token_count=token_count,
-        enabled_token_count=enabled_token_count,
-        unhealthy_token_count=unhealthy_token_count,
-        smtp_count=smtp_count,
-        enabled_smtp_count=enabled_smtp_count,
-        unhealthy_smtp_count=unhealthy_smtp_count,
-        smtp_configured=smtp_configured(),
-        pending_notifications=pending_notifications,
-        failed_notifications=failed_notifications,
-        sent_notifications=sent_notifications + daily_report_emails,
-        total_notifications=total_notifications + total_daily_report_emails,
-        recent_sent_notifications=recent_sent_notifications + recent_daily_report_emails,
-        recent_failed_notifications=recent_failed_notifications + recent_failed_daily_report_emails,
-        all_sent_emails=all_sent_emails,
-        all_total_emails=all_total_emails,
-        recent_sent_emails=recent_sent_emails,
-        recent_failed_emails=recent_failed_emails,
-        active_bindings=active_bindings,
-        verified_users=verified_users,
-        total_rooms=total_rooms,
-        total_users=total_users,
-        latest_read_at=latest_read_at,
-    )
-
-
-@router.get("/audit-logs", response_model=list[AdminAuditLogOut])
-def list_audit_logs(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-    days: int = Query(7, ge=0, le=365),
-    limit: int = Query(200, ge=0, le=1000),
-    q: str | None = Query(None, max_length=120),
-    sort: Literal["asc", "desc"] = Query("desc"),
-) -> list[AdminAuditLog]:
-    stmt = select(AdminAuditLog)
-    if days:
-        stmt = stmt.where(AdminAuditLog.created_at >= _log_since(days))
-    pattern = _search_pattern(q)
-    if pattern:
-        stmt = stmt.where(
-            or_(
-                AdminAuditLog.action.ilike(pattern),
-                AdminAuditLog.target_type.ilike(pattern),
-                AdminAuditLog.target_id.ilike(pattern),
-                AdminAuditLog.detail.ilike(pattern),
-            )
-        )
-    stmt = stmt.order_by(*_log_order(AdminAuditLog, sort))
-    if limit:
-        stmt = stmt.limit(limit)
-    return list(db.scalars(stmt))
 
 
 @router.post("/jobs/checks/run")

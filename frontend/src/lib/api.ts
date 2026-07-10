@@ -117,7 +117,7 @@ export interface ApiClient {
   getMe: () => Promise<User>;
   listBuildings: () => Promise<Building[]>;
   register: (payload: { email: string; password: string }) => Promise<RegisterResponse>;
-  verifyEmail: (payload: { email: string; code: string }) => Promise<User>;
+  verifyEmail: (payload: { email: string; code: string; password: string }) => Promise<User>;
   login: (payload: { email: string; password: string }) => Promise<LoginResponse>;
   requestNotificationEmailCode: (payload: { email: string }) => Promise<{ email: string; dev_verification_code?: string | null; email_sent: boolean }>;
   verifyNotificationEmail: (payload: { email: string; code: string }) => Promise<User>;
@@ -127,6 +127,7 @@ export interface ApiClient {
     daily_report_interval_days?: number;
   }) => Promise<User>;
   sendTestEmail: () => Promise<{ email: string; email_sent: boolean }>;
+  updatePassword: (payload: { old_password: string; new_password: string }) => Promise<LoginResponse>;
   deleteAccount: (payload: { password: string }) => Promise<void>;
   getRuntimeLimits: () => Promise<RuntimeLimits>;
   listRoomSummaries: () => Promise<UserRoomSummary[]>;
@@ -169,7 +170,7 @@ export interface ApiClient {
   adminLogin: (payload: { username: string; password: string }) => Promise<AdminLoginResponse>;
   getAdminMe: () => Promise<AdminUser>;
   updateAdminProfile: (payload: { display_name?: string | null }) => Promise<AdminUser>;
-  updateAdminPassword: (payload: { old_password: string; new_password: string }) => Promise<{ status: string }>;
+  updateAdminPassword: (payload: { old_password: string; new_password: string }) => Promise<AdminLoginResponse>;
   listAdminUsers: () => Promise<AdminManagedUser[]>;
   getAdminUser: (userId: number) => Promise<AdminManagedUserDetail>;
   updateAdminUser: (
@@ -250,7 +251,11 @@ export interface ApiClient {
   testAnySmtpSettings: (payload: { to_email: string }) => Promise<{ status: string }>;
   getAppearanceSettings: () => Promise<AppearanceSettings>;
   updateAppearanceSettings: (payload: Partial<AppearanceSettings>) => Promise<AppearanceSettings>;
-  uploadAppearanceBackground: (payload: { theme: "light" | "dark"; file: File }) => Promise<{ theme: "light" | "dark"; url: string }>;
+  uploadAppearanceBackground: (payload: { theme: "light" | "dark"; file: File }) => Promise<{
+    theme: "light" | "dark";
+    url: string;
+    blurred_url: string;
+  }>;
   getRuntimeSettings: () => Promise<RuntimeSettings>;
   updateRuntimeSettings: (payload: Partial<RuntimeSettings>) => Promise<RuntimeSettings>;
   getAdminStatus: () => Promise<AdminStatus>;
@@ -357,6 +362,15 @@ export function createApiClient(token?: string | null): ApiClient {
         },
         token
       ),
+    updatePassword: (payload) =>
+      request<LoginResponse>(
+        "/api/me/password",
+        {
+          method: "POST",
+          body: JSON.stringify(payload)
+        },
+        token
+      ),
     deleteAccount: (payload) =>
       request<void>(
         "/api/me/account",
@@ -422,7 +436,7 @@ export function createApiClient(token?: string | null): ApiClient {
         token
       ),
     updateAdminPassword: (payload) =>
-      request<{ status: string }>(
+      request<AdminLoginResponse>(
         "/api/admin/auth/password",
         {
           method: "POST",
@@ -566,7 +580,7 @@ export function createApiClient(token?: string | null): ApiClient {
       const form = new FormData();
       form.set("theme", theme);
       form.set("file", file);
-      return request<{ theme: "light" | "dark"; url: string }>(
+      return request<{ theme: "light" | "dark"; url: string; blurred_url: string }>(
         "/api/admin/appearance/background",
         {
           method: "POST",

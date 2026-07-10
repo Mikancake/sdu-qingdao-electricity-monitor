@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -247,17 +248,25 @@ def _send_with_config(
 ) -> EmailSendResult:
     if not config.configured:
         return EmailSendResult(False, "SMTP is not configured", smtp_id=config.id, smtp_name=config.name)
+    if config.username and not config.use_ssl and not config.use_starttls:
+        return EmailSendResult(
+            False,
+            "refusing to send SMTP credentials without TLS",
+            smtp_id=config.id,
+            smtp_name=config.name,
+        )
 
-    message = _build_message(to_email, subject, body, config, html_body=html_body)
     try:
+        message = _build_message(to_email, subject, body, config, html_body=html_body)
+        tls_context = ssl.create_default_context()
         if config.use_ssl:
-            with smtplib.SMTP_SSL(config.host, config.port, timeout=20) as smtp:
+            with smtplib.SMTP_SSL(config.host, config.port, timeout=20, context=tls_context) as smtp:
                 _login(smtp, config)
                 _send_message_data(smtp, message, config, to_email)
         else:
             with smtplib.SMTP(config.host, config.port, timeout=20) as smtp:
                 if config.use_starttls:
-                    smtp.starttls()
+                    smtp.starttls(context=tls_context)
                 _login(smtp, config)
                 _send_message_data(smtp, message, config, to_email)
     except DeliveryStatusUnknownError as exc:
@@ -271,7 +280,7 @@ def _send_with_config(
             error_msg=error,
         )
         return EmailSendResult(True, error, smtp_id=config.id, smtp_name=config.name)
-    except (OSError, smtplib.SMTPException) as exc:
+    except (OSError, ValueError, smtplib.SMTPException) as exc:
         error_kind = _classify_smtp_error(exc)
         error = f"{type(exc).__name__}: {exc}"
         _record_smtp_health(config, success=False, source=source, recipient_email=to_email, error_kind=error_kind, error_msg=error)

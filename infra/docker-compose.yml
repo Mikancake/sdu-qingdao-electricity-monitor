@@ -6,9 +6,10 @@ services:
     environment:
       POSTGRES_DB: sdu_power
       POSTGRES_USER: sdu_power
-      POSTGRES_PASSWORD: change_this_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD before starting Compose}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

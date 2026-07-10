@@ -19,7 +19,10 @@
   --app-bg-image: none;
   --app-bg-image-light: none;
   --app-bg-image-dark: none;
+  --app-bg-image-blurred-light: none;
+  --app-bg-image-blurred-dark: none;
   --app-bg-image-active: var(--app-bg-image-light);
+  --app-bg-image-blurred-active: var(--app-bg-image-blurred-light);
   --app-bg-position: center;
   --app-bg-overlay-opacity: 0.42;
   --app-bg-blur: 0px;
@@ -51,6 +54,7 @@
   --glass-edge: hsl(var(--foreground) / 0.16);
   --glass-noise-opacity: 0;
   --app-bg-image-active: var(--app-bg-image-dark);
+  --app-bg-image-blurred-active: var(--app-bg-image-blurred-dark);
 }
 
 * {
@@ -83,7 +87,7 @@ select {
 .app-background {
   position: relative;
   isolation: isolate;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .app-background::before,
@@ -125,7 +129,19 @@ select {
   mask-image: linear-gradient(to bottom, black, black 78%, transparent);
 }
 
-html[data-background-blur="on"] .app-background::before {
+html:not(.dark)[data-preblur-light="on"][data-background-blur="on"] .app-background::before,
+html:not(.dark)[data-preblur-light="on"][data-glass-mode="frosted"] .app-background::before,
+html.dark[data-preblur-dark="on"][data-background-blur="on"] .app-background::before,
+html.dark[data-preblur-dark="on"][data-glass-mode="frosted"] .app-background::before {
+  background-image:
+    var(--app-bg-image-blurred-active),
+    linear-gradient(135deg, hsl(var(--background)), hsl(var(--muted)));
+  filter: none;
+  transform: none;
+}
+
+html:not(.dark)[data-preblur-light="off"][data-background-blur="on"] .app-background::before,
+html.dark[data-preblur-dark="off"][data-background-blur="on"] .app-background::before {
   filter: blur(var(--app-bg-blur)) saturate(1.06);
   transform: translate3d(0, 0, 0) scale(1.025);
 }
@@ -163,21 +179,15 @@ html[data-background-blur="on"] .app-background::before {
 }
 
 html[data-glass-mode="frosted"] .glass-panel.fixed,
-html[data-glass-mode="frosted"] .glass-panel.sticky,
-html[data-glass-mode="frosted"] .auth-shell {
-  background:
-    linear-gradient(145deg, hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08)), hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.08))),
-    hsl(var(--panel) / var(--glass-card-opacity));
+html[data-glass-mode="frosted"] .glass-panel.sticky {
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.04));
   backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.08) brightness(0.98);
   -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.08) brightness(0.98);
 }
 
 .dark[data-glass-mode="frosted"] .glass-panel.fixed,
-.dark[data-glass-mode="frosted"] .glass-panel.sticky,
-.dark[data-glass-mode="frosted"] .auth-shell {
-  background:
-    linear-gradient(145deg, hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08)), hsl(var(--panel) / calc(var(--glass-card-opacity) - 0.08))),
-    hsl(220 16% 10% / var(--glass-card-opacity));
+.dark[data-glass-mode="frosted"] .glass-panel.sticky {
+  background: hsl(0 0% 9% / calc(var(--glass-card-opacity) + 0.08));
 }
 
 .glass-card::before,
@@ -317,16 +327,14 @@ html[data-glass-mode="liquid"] .glass-tile::after {
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   html[data-glass-mode="liquid"] .glass-panel.fixed,
   html[data-glass-mode="liquid"] .glass-panel.sticky,
-  html[data-glass-mode="liquid"] .auth-shell,
   html[data-glass-mode="liquid"] .admin-toolbar {
     background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.04));
-    backdrop-filter: blur(min(var(--glass-card-blur), 14px)) saturate(1.16);
-    -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 14px)) saturate(1.16);
+    backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.18);
+    -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.18);
   }
 
   html.dark[data-glass-mode="liquid"] .glass-panel.fixed,
   html.dark[data-glass-mode="liquid"] .glass-panel.sticky,
-  html.dark[data-glass-mode="liquid"] .auth-shell,
   html.dark[data-glass-mode="liquid"] .admin-toolbar {
     background: hsl(0 0% 8% / calc(var(--glass-card-opacity) + 0.16));
   }
@@ -551,4 +559,203 @@ html[data-glass-mode="frosted"] .auth-shell::before {
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--border)) transparent;
+}
+
+.glass-card,
+.glass-panel,
+.glass-tile {
+  border-color: hsl(var(--foreground) / 0.13);
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.08));
+  box-shadow:
+    0 18px 44px -34px rgba(15, 23, 42, 0.68),
+    inset 0 0 0 1px hsl(var(--foreground) / 0.035);
+}
+
+.dark .glass-card,
+.dark .glass-panel,
+.dark .glass-tile {
+  border-color: hsl(0 0% 100% / 0.14);
+  background: hsl(0 0% 8% / calc(var(--glass-card-opacity) + 0.12));
+  box-shadow:
+    0 20px 46px -34px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.035);
+}
+
+.glass-card::before,
+.glass-panel::before,
+.glass-tile::before,
+.glass-card::after,
+.glass-panel::after,
+.glass-tile::after,
+html[data-glass-mode="frosted"] .auth-shell::before {
+  display: none;
+}
+
+html[data-glass-mode="frosted"] .glass-card,
+html[data-glass-mode="frosted"] .glass-panel,
+html[data-glass-mode="frosted"] .glass-tile {
+  border-color: hsl(var(--foreground) / 0.16);
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.04));
+  box-shadow:
+    0 20px 46px -34px rgba(15, 23, 42, 0.72),
+    inset 0 0 0 1px hsl(var(--foreground) / 0.045);
+}
+
+html.dark[data-glass-mode="frosted"] .glass-card,
+html.dark[data-glass-mode="frosted"] .glass-panel,
+html.dark[data-glass-mode="frosted"] .glass-tile {
+  background: hsl(0 0% 9% / calc(var(--glass-card-opacity) + 0.08));
+}
+
+html[data-glass-mode="frosted"] .glass-card::after,
+html[data-glass-mode="frosted"] .glass-panel::after,
+html[data-glass-mode="frosted"] .glass-tile::after {
+  display: block;
+  background: radial-gradient(hsl(var(--foreground) / 0.12) 0.45px, transparent 0.65px);
+  background-size: 3px 3px;
+  opacity: 0.12;
+}
+
+html[data-glass-mode="liquid"] .glass-card,
+html[data-glass-mode="liquid"] .glass-panel,
+html[data-glass-mode="liquid"] .glass-tile {
+  border-color: hsl(var(--foreground) / 0.18);
+  background: hsl(var(--panel) / calc(var(--glass-card-opacity) + 0.12));
+  box-shadow:
+    0 22px 52px -38px rgba(15, 23, 42, 0.76),
+    inset 0 0 0 1px hsl(var(--foreground) / 0.055);
+}
+
+html.dark[data-glass-mode="liquid"] .glass-card,
+html.dark[data-glass-mode="liquid"] .glass-panel,
+html.dark[data-glass-mode="liquid"] .glass-tile {
+  border-color: hsl(0 0% 100% / 0.19);
+  background: hsl(0 0% 8% / calc(var(--glass-card-opacity) + 0.16));
+}
+
+html[data-glass-mode="liquid"] .liquid-surface,
+html[data-glass-mode="liquid"] .admin-toolbar,
+html[data-glass-mode="liquid"] .auth-mode-tabs {
+  border-color: hsl(var(--foreground) / 0.22);
+  background: hsl(var(--panel) / 0.48);
+  box-shadow:
+    0 18px 46px -32px rgba(15, 23, 42, 0.78),
+    inset 0 0 0 1px hsl(var(--foreground) / 0.075);
+}
+
+html.dark[data-glass-mode="liquid"] .liquid-surface,
+html.dark[data-glass-mode="liquid"] .admin-toolbar,
+html.dark[data-glass-mode="liquid"] .auth-mode-tabs {
+  border-color: hsl(0 0% 100% / 0.22);
+  background: hsl(0 0% 7% / 0.58);
+  box-shadow:
+    0 22px 52px -34px rgba(0, 0, 0, 0.95),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.07);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-glass-mode="frosted"] .liquid-surface,
+  html[data-glass-mode="frosted"] .admin-toolbar,
+  html[data-glass-mode="frosted"] .auth-mode-tabs {
+    backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.14);
+    -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.14);
+  }
+
+  html[data-glass-mode="liquid"] .liquid-surface,
+  html[data-glass-mode="liquid"] .admin-toolbar,
+  html[data-glass-mode="liquid"] .auth-mode-tabs {
+    backdrop-filter: blur(min(var(--glass-card-blur), 10px)) saturate(1.24) contrast(1.03);
+    -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 10px)) saturate(1.24) contrast(1.03);
+  }
+
+  html[data-glass-mode="liquid"] .app-sidebar {
+    backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.18);
+    -webkit-backdrop-filter: blur(min(var(--glass-card-blur), 8px)) saturate(1.18);
+  }
+}
+
+.app-nav-item,
+.app-control {
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
+}
+
+.app-nav-item:active,
+.app-control:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+html[data-glass-mode="liquid"] .app-nav-item-active {
+  border: 1px solid hsl(var(--foreground) / 0.16);
+  background: hsl(var(--foreground) / 0.1) !important;
+  color: hsl(var(--primary)) !important;
+  box-shadow:
+    0 8px 22px -16px rgba(15, 23, 42, 0.72),
+    inset 0 0 0 1px hsl(var(--foreground) / 0.045);
+}
+
+html.dark[data-glass-mode="liquid"] .app-nav-item-active {
+  border-color: hsl(0 0% 100% / 0.17);
+  background: hsl(0 0% 100% / 0.1) !important;
+}
+
+html[data-glass-mode="liquid"] .glass-control {
+  border-color: hsl(var(--foreground) / 0.17);
+  background: hsl(var(--panel) / 0.4);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.045);
+}
+
+html.dark[data-glass-mode="liquid"] .glass-control {
+  border-color: hsl(0 0% 100% / 0.18);
+  background: hsl(0 0% 100% / 0.07);
+}
+
+.mobile-liquid-nav {
+  position: fixed;
+  right: auto;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 40;
+  width: min(calc(100% - 24px), 460px);
+  padding: 6px;
+  border: 1px solid hsl(var(--foreground) / 0.2);
+  border-radius: 26px;
+  transform: translateX(-50%);
+}
+
+.mobile-liquid-nav .mobile-nav-item {
+  height: 48px;
+  flex-direction: column;
+  border-radius: 20px;
+}
+
+.admin-mobile-nav {
+  scrollbar-width: none;
+}
+
+.admin-mobile-nav::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-glass-mode="frosted"] .appearance-preview-light {
+  background-image:
+    var(--app-bg-image-blurred-light),
+    linear-gradient(135deg, hsl(199 76% 92%), hsl(142 44% 93%) 48%, hsl(28 70% 94%));
+}
+
+html[data-glass-mode="frosted"] .appearance-preview-dark {
+  background-image:
+    var(--app-bg-image-blurred-dark),
+    linear-gradient(135deg, hsl(222 28% 8%), hsl(190 34% 16%) 50%, hsl(28 28% 15%));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-nav-item,
+  .app-control {
+    transition: none;
+  }
 }

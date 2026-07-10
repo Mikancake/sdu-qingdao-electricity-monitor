@@ -13,17 +13,30 @@ def now_like(value: datetime | None = None) -> datetime:
 
 def select_available_token(db: Session) -> AuthToken | None:
     tokens = list(db.scalars(select(AuthToken).where(AuthToken.enabled.is_(True)).order_by(AuthToken.id)))
-    best_token: AuthToken | None = None
-    best_available_key: float | None = None
-
+    candidates: list[tuple[tuple[int, float, int], int]] = []
     for token in tokens:
         if token.last_used_at is None:
-            return token
-        next_available_at = token.last_used_at + timedelta(seconds=token.min_interval_seconds)
-        if next_available_at > now_like(next_available_at):
+            candidates.append(((0, 0.0, token.id), token.id))
             continue
-        available_key = next_available_at.timestamp()
-        if best_available_key is None or available_key < best_available_key:
-            best_token = token
-            best_available_key = available_key
-    return best_token
+        next_available_at = token.last_used_at + timedelta(seconds=token.min_interval_seconds)
+        if next_available_at <= now_like(next_available_at):
+            candidates.append(((1, next_available_at.timestamp(), token.id), token.id))
+
+    for _, token_id in sorted(candidates):
+        stmt = (
+            select(AuthToken)
+            .where(AuthToken.id == token_id, AuthToken.enabled.is_(True))
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        token = db.scalar(stmt)
+        if token is None:
+            continue
+        if token.last_used_at is not None:
+            next_available_at = token.last_used_at + timedelta(seconds=token.min_interval_seconds)
+            if next_available_at > now_like(next_available_at):
+                continue
+        token.last_used_at = now_like(token.last_used_at)
+        db.flush()
+        return token
+    return None

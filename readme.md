@@ -174,7 +174,8 @@ sdu-qingdao-electricity-monitor/
 │   ├── .env.example
 │   └── package.json
 ├── infra/
-│   └── docker-compose.yml    # PostgreSQL 开发环境
+│   ├── docker-compose.yml    # PostgreSQL 开发环境
+│   └── nginx.example.conf    # Nginx 反向代理与安全头示例
 ├── LICENSE.md
 └── readme.md
 ```
@@ -201,8 +202,13 @@ Copy-Item .env.example .env
 ```text
 APP_DEBUG=false
 SECRET_KEY="replace-with-a-random-secret-at-least-32-chars"
+CREDENTIAL_ENCRYPTION_KEY="replace-with-a-different-random-secret-at-least-32-chars"
 CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
+TRUSTED_HOSTS=""
+TRUSTED_PROXY_CIDRS="127.0.0.1/32,::1/128"
+SECURITY_HEADERS_ENABLED=true
 DATABASE_URL="sqlite:///./dev.sqlite3"
+MAX_REQUEST_BODY_BYTES=1048576
 
 CHECK_INTERVAL_SECONDS=14400
 CHECK_BATCH_SIZE=50
@@ -228,8 +234,11 @@ SMTP_USE_STARTTLS=false
 | 配置 | 说明 |
 |------|------|
 | `SECRET_KEY` | 换成随机长字符串 |
+| `CREDENTIAL_ENCRYPTION_KEY` | 使用另一条随机密钥，加密数据库中的查询 token 和 SMTP 密码 |
 | `DATABASE_URL` | 建议使用 PostgreSQL |
 | `CORS_ORIGINS` | 改成你的前端访问地址 |
+| `TRUSTED_HOSTS` | 可留空并从 `CORS_ORIGINS` 推导；不要在生产使用 `*` |
+| `TRUSTED_PROXY_CIDRS` | 只填写直接连接 API 的反向代理地址；同机 Nginx 使用默认值即可 |
 | `SMTP_*` | 配置发信邮箱和授权码 |
 | `INITIAL_ADMIN_*` | 首次创建管理员可用；创建后建议从 `.env` 删除 |
 
@@ -330,8 +339,12 @@ DATABASE_URL="sqlite:///./dev.sqlite3"
 生产建议 PostgreSQL。项目提供开发用 Compose：
 
 ```powershell
+$env:POSTGRES_PASSWORD="replace-with-a-strong-random-password"
 docker compose -f infra/docker-compose.yml up -d
+Remove-Item Env:POSTGRES_PASSWORD
 ```
+
+Compose 只把 PostgreSQL 绑定到 `127.0.0.1:5432`，并且未设置 `POSTGRES_PASSWORD` 时会拒绝启动。
 
 然后修改 `backend/.env`：
 
@@ -395,8 +408,11 @@ cp .env.example .env
 ```text
 APP_DEBUG=false
 SECRET_KEY="replace-with-a-long-random-string"
+CREDENTIAL_ENCRYPTION_KEY="replace-with-a-different-long-random-string"
 DATABASE_URL="postgresql+psycopg://sdu_power:change-this-database-password@127.0.0.1:5432/sdu_power"
 CORS_ORIGINS="https://your-domain.example"
+TRUSTED_HOSTS="your-domain.example"
+TRUSTED_PROXY_CIDRS="127.0.0.1/32,::1/128"
 
 SMTP_HOST="smtp.example.com"
 SMTP_PORT=465
@@ -412,7 +428,10 @@ SMTP_USE_STARTTLS=false
 ```bash
 python -m app.scripts.init_db
 python -m app.scripts.create_admin admin
+python -m app.scripts.encrypt_credentials
 ```
+
+`encrypt_credentials` 会把已有查询 token 和 SMTP 密码原地迁移为 AES-GCM 密文。轮换加密密钥时，先把旧密钥临时放进 `CREDENTIAL_ENCRYPTION_OLD_KEYS`，运行迁移后再清空旧密钥。
 
 ### 4. systemd
 
@@ -426,13 +445,19 @@ After=network.target postgresql.service
 [Service]
 WorkingDirectory=/opt/sdu-qingdao-electricity-monitor/backend
 EnvironmentFile=/opt/sdu-qingdao-electricity-monitor/backend/.env
-ExecStart=/opt/sdu-qingdao-electricity-monitor/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/sdu-qingdao-electricity-monitor/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1 --no-server-header
 Restart=always
 RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+当前限流状态保存在 API 进程内；在换成 Redis 等共享限流后端之前，请保持单个 Uvicorn worker，不要添加 `--workers 2` 之类的参数。
 
 Worker 服务示例：
 
@@ -447,6 +472,9 @@ EnvironmentFile=/opt/sdu-qingdao-electricity-monitor/backend/.env
 ExecStart=/opt/sdu-qingdao-electricity-monitor/backend/.venv/bin/python -m app.worker
 Restart=always
 RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -476,7 +504,9 @@ npm install
 npm run build
 ```
 
-将 `frontend/dist` 作为 Nginx 静态站点目录，并把 `/api` 反向代理到 `127.0.0.1:8000`。
+将 `frontend/dist` 作为 Nginx 静态站点目录，并把 `/api` 反向代理到 `127.0.0.1:8000`。仓库中的 `infra/nginx.example.conf` 已包含转发 IP 覆盖、敏感文件拒绝、请求体限制和浏览器安全头，可按实际 IP/域名修改后使用。
+
+> 登录密码和访问 token 不能通过明文 HTTP 对外传输。内网测试可以暂用 IP，正式开放前仍应配置 HTTPS；没有域名时可使用受信任的内网 CA、VPN，或先限制为可信内网访问。
 
 ---
 
@@ -537,6 +567,9 @@ python -m app.worker
 | `*.sqlite3` / `*.db` | 包含用户和读数数据 | 不提交，生产做好备份 |
 | `backend/uploads/` | 可能包含自定义背景图 | 不提交 |
 | `SECRET_KEY` | 影响登录 token 签名 | 生产环境必须更换 |
+| `CREDENTIAL_ENCRYPTION_KEY` | 保护数据库和备份中的外部凭据 | 与 `SECRET_KEY` 分开保存，权限建议 600 |
+| HTTP 明文访问 | 密码和登录 token 可被同网段窃听 | 正式开放前启用 HTTPS |
+| PostgreSQL 端口 | 暴露后可能被直接探测或撞库 | 只监听 `127.0.0.1`，并用防火墙限制 |
 
 提交前建议检查：
 

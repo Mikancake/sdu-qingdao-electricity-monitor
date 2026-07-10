@@ -7,12 +7,20 @@ from pydantic import BaseModel, Field, field_validator
 BackgroundPosition = Literal["top", "center", "bottom"]
 GlassEffectMode = Literal["lite", "frosted", "liquid"]
 DISALLOWED_BACKGROUND_SUFFIXES = (".gif", ".mp4", ".webm", ".mov", ".m4v", ".avi")
+ALLOWED_DATA_IMAGE_PREFIXES = (
+    "data:image/avif;",
+    "data:image/jpeg;",
+    "data:image/png;",
+    "data:image/webp;",
+)
 
 
 class AppearanceSettingsOut(BaseModel):
     background_image_url: str | None = Field(default=None, max_length=2048)
     light_background_image_url: str | None = Field(default=None, max_length=2048)
     dark_background_image_url: str | None = Field(default=None, max_length=2048)
+    light_background_blurred_url: str | None = Field(default=None, max_length=2048)
+    dark_background_blurred_url: str | None = Field(default=None, max_length=2048)
     background_position: BackgroundPosition = "center"
     background_overlay_opacity: float = Field(default=0.42, ge=0.16, le=0.82)
     background_blur_px: int = Field(default=0, ge=0, le=18)
@@ -30,14 +38,22 @@ class AppearanceSettingsOut(BaseModel):
         if not stripped:
             return None
         is_local_upload = stripped.startswith("/uploads/")
-        if not (stripped.startswith("http://") or stripped.startswith("https://") or stripped.startswith("data:image/") or is_local_upload):
+        is_allowed_data_image = stripped.lower().startswith(ALLOWED_DATA_IMAGE_PREFIXES)
+        if stripped.lower().startswith("data:image/") and not is_allowed_data_image:
+            raise ValueError("only raster data:image backgrounds are supported")
+        if not (stripped.startswith("http://") or stripped.startswith("https://") or is_allowed_data_image or is_local_upload):
             raise ValueError("background image must be http(s), data:image, or /uploads URL")
         lowered = stripped.split("?", 1)[0].split("#", 1)[0].lower()
         if lowered.endswith(DISALLOWED_BACKGROUND_SUFFIXES) or stripped.startswith("data:image/gif"):
             raise ValueError("animated or video backgrounds are not supported")
         return stripped
 
-    @field_validator("light_background_image_url", "dark_background_image_url")
+    @field_validator(
+        "light_background_image_url",
+        "dark_background_image_url",
+        "light_background_blurred_url",
+        "dark_background_blurred_url",
+    )
     @classmethod
     def validate_theme_background_image_url(cls, value: str | None) -> str | None:
         return cls.validate_background_image_url(value)
@@ -47,6 +63,8 @@ class AppearanceSettingsUpdate(BaseModel):
     background_image_url: str | None = Field(default=None, max_length=2048)
     light_background_image_url: str | None = Field(default=None, max_length=2048)
     dark_background_image_url: str | None = Field(default=None, max_length=2048)
+    light_background_blurred_url: str | None = Field(default=None, max_length=2048)
+    dark_background_blurred_url: str | None = Field(default=None, max_length=2048)
     background_position: BackgroundPosition | None = None
     background_overlay_opacity: float | None = Field(default=None, ge=0.16, le=0.82)
     background_blur_px: int | None = Field(default=None, ge=0, le=18)
@@ -59,7 +77,12 @@ class AppearanceSettingsUpdate(BaseModel):
     def validate_background_image_url(cls, value: str | None) -> str | None:
         return AppearanceSettingsOut.validate_background_image_url(value)
 
-    @field_validator("light_background_image_url", "dark_background_image_url")
+    @field_validator(
+        "light_background_image_url",
+        "dark_background_image_url",
+        "light_background_blurred_url",
+        "dark_background_blurred_url",
+    )
     @classmethod
     def validate_theme_background_image_url(cls, value: str | None) -> str | None:
         return AppearanceSettingsOut.validate_background_image_url(value)
@@ -68,3 +91,4 @@ class AppearanceSettingsUpdate(BaseModel):
 class AppearanceBackgroundUploadOut(BaseModel):
     theme: Literal["light", "dark"]
     url: str
+    blurred_url: str

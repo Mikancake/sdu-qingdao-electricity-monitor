@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.core.secret_storage import EncryptedText
 
 
 class SmtpSettings(Base):
@@ -14,7 +15,7 @@ class SmtpSettings(Base):
     host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     port: Mapped[int] = mapped_column(Integer, default=465)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    password: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    password: Mapped[str | None] = mapped_column(EncryptedText(), nullable=True)
     from_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     min_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)

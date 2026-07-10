@@ -49,6 +49,7 @@ def check_and_store_room(
     user_id: int | None = None,
     user_room_id: int | None = None,
 ) -> RoomCheckOutcome:
+    db.scalar(select(Room.id).where(Room.id == room.id).with_for_update())
     attempt = CheckAttempt(
         room_id=room.id,
         user_id=user_id,
