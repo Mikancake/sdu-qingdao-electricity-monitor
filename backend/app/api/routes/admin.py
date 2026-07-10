@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -96,6 +96,21 @@ def _preview_secret(value: str, *, head: int = 6, tail: int = 4) -> str:
     if len(value) <= head + tail:
         return "*" * len(value)
     return f"{value[:head]}...{value[-tail:]}"
+
+
+def _log_since(days: int) -> datetime:
+    return datetime.now() - timedelta(days=days)
+
+
+def _search_pattern(q: str | None) -> str | None:
+    value = (q or "").strip()
+    return f"%{value}%" if value else None
+
+
+def _log_order(model: object, sort: Literal["asc", "desc"]):
+    if sort == "asc":
+        return (model.created_at.asc(), model.id.asc())
+    return (model.created_at.desc(), model.id.desc())
 
 
 def _token_out(token: AuthToken) -> AdminAuthTokenOut:
@@ -413,13 +428,33 @@ def list_tokens(
 def list_token_health_logs(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
+    days: int = Query(7, ge=0, le=365),
+    limit: int = Query(200, ge=0, le=1000),
+    q: str | None = Query(None, max_length=120),
+    sort: Literal["asc", "desc"] = Query("desc"),
 ) -> list[AdminAuthTokenHealthLogOut]:
+    stmt = select(AuthTokenHealthLog, AuthToken).outerjoin(
+        AuthToken, AuthToken.id == AuthTokenHealthLog.auth_token_id
+    )
+    if days:
+        stmt = stmt.where(AuthTokenHealthLog.created_at >= _log_since(days))
+    pattern = _search_pattern(q)
+    if pattern:
+        stmt = stmt.where(
+            or_(
+                AuthToken.name.ilike(pattern),
+                AuthTokenHealthLog.source.ilike(pattern),
+                AuthTokenHealthLog.error_kind.ilike(pattern),
+                AuthTokenHealthLog.error_msg.ilike(pattern),
+                AuthTokenHealthLog.health_status.ilike(pattern),
+            )
+        )
+    stmt = stmt.order_by(*_log_order(AuthTokenHealthLog, sort))
+    if limit:
+        stmt = stmt.limit(limit)
     rows = list(
         db.execute(
-            select(AuthTokenHealthLog, AuthToken)
-            .outerjoin(AuthToken, AuthToken.id == AuthTokenHealthLog.auth_token_id)
-            .order_by(AuthTokenHealthLog.created_at.desc(), AuthTokenHealthLog.id.desc())
-            .limit(200)
+            stmt
         ).all()
     )
     return [
@@ -558,13 +593,34 @@ def list_smtp_settings(
 def list_smtp_health_logs(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
+    days: int = Query(7, ge=0, le=365),
+    limit: int = Query(200, ge=0, le=1000),
+    q: str | None = Query(None, max_length=120),
+    sort: Literal["asc", "desc"] = Query("desc"),
 ) -> list[SmtpHealthLogOut]:
+    stmt = select(SmtpHealthLog, SmtpSettings).outerjoin(
+        SmtpSettings, SmtpSettings.id == SmtpHealthLog.smtp_settings_id
+    )
+    if days:
+        stmt = stmt.where(SmtpHealthLog.created_at >= _log_since(days))
+    pattern = _search_pattern(q)
+    if pattern:
+        stmt = stmt.where(
+            or_(
+                SmtpSettings.name.ilike(pattern),
+                SmtpHealthLog.source.ilike(pattern),
+                SmtpHealthLog.recipient_email.ilike(pattern),
+                SmtpHealthLog.error_kind.ilike(pattern),
+                SmtpHealthLog.error_msg.ilike(pattern),
+                SmtpHealthLog.health_status.ilike(pattern),
+            )
+        )
+    stmt = stmt.order_by(*_log_order(SmtpHealthLog, sort))
+    if limit:
+        stmt = stmt.limit(limit)
     rows = list(
         db.execute(
-            select(SmtpHealthLog, SmtpSettings)
-            .outerjoin(SmtpSettings, SmtpSettings.id == SmtpHealthLog.smtp_settings_id)
-            .order_by(SmtpHealthLog.created_at.desc(), SmtpHealthLog.id.desc())
-            .limit(200)
+            stmt
         ).all()
     )
     return [
@@ -868,8 +924,28 @@ def get_admin_status(
 def list_audit_logs(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
+    days: int = Query(7, ge=0, le=365),
+    limit: int = Query(200, ge=0, le=1000),
+    q: str | None = Query(None, max_length=120),
+    sort: Literal["asc", "desc"] = Query("desc"),
 ) -> list[AdminAuditLog]:
-    return list(db.scalars(select(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(200)))
+    stmt = select(AdminAuditLog)
+    if days:
+        stmt = stmt.where(AdminAuditLog.created_at >= _log_since(days))
+    pattern = _search_pattern(q)
+    if pattern:
+        stmt = stmt.where(
+            or_(
+                AdminAuditLog.action.ilike(pattern),
+                AdminAuditLog.target_type.ilike(pattern),
+                AdminAuditLog.target_id.ilike(pattern),
+                AdminAuditLog.detail.ilike(pattern),
+            )
+        )
+    stmt = stmt.order_by(*_log_order(AdminAuditLog, sort))
+    if limit:
+        stmt = stmt.limit(limit)
+    return list(db.scalars(stmt))
 
 
 @router.post("/jobs/checks/run")

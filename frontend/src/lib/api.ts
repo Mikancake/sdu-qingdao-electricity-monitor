@@ -1,6 +1,7 @@
 import type {
   AppearanceSettings,
   AdminAuthTokenHealthLog,
+  AdminLogQuery,
   AdminHealthTestResult,
   AdminAuthToken,
   AdminAuditLog,
@@ -214,7 +215,7 @@ export interface ApiClient {
   ) => Promise<AdminAuthToken>;
   deleteAdminToken: (tokenId: number) => Promise<void>;
   testAdminToken: (tokenId: number, payload?: { room_id?: number | null }) => Promise<AdminHealthTestResult>;
-  listAdminTokenHealthLogs: () => Promise<AdminAuthTokenHealthLog[]>;
+  listAdminTokenHealthLogs: (params?: AdminLogQuery) => Promise<AdminAuthTokenHealthLog[]>;
   listSmtpSettings: () => Promise<SmtpSettings[]>;
   createSmtpSettings: (payload: {
     name: string;
@@ -245,7 +246,7 @@ export interface ApiClient {
   ) => Promise<SmtpSettings>;
   deleteSmtpSettings: (smtpId: number) => Promise<void>;
   testSmtpSettings: (smtpId: number, payload: { to_email: string }) => Promise<{ status: string }>;
-  listSmtpHealthLogs: () => Promise<SmtpHealthLog[]>;
+  listSmtpHealthLogs: (params?: AdminLogQuery) => Promise<SmtpHealthLog[]>;
   testAnySmtpSettings: (payload: { to_email: string }) => Promise<{ status: string }>;
   getAppearanceSettings: () => Promise<AppearanceSettings>;
   updateAppearanceSettings: (payload: Partial<AppearanceSettings>) => Promise<AppearanceSettings>;
@@ -253,7 +254,7 @@ export interface ApiClient {
   getRuntimeSettings: () => Promise<RuntimeSettings>;
   updateRuntimeSettings: (payload: Partial<RuntimeSettings>) => Promise<RuntimeSettings>;
   getAdminStatus: () => Promise<AdminStatus>;
-  listAdminAuditLogs: () => Promise<AdminAuditLog[]>;
+  listAdminAuditLogs: (params?: AdminLogQuery) => Promise<AdminAuditLog[]>;
   runAdminChecks: () => Promise<{ checked: number; succeeded: number; failed: number }>;
   runAdminNotifications: () => Promise<{ scanned: number; sent: number; skipped: number; failed: number }>;
   runAdminDataRetentionCleanup: () => Promise<DataRetentionCleanupResult>;
@@ -502,7 +503,8 @@ export function createApiClient(token?: string | null): ApiClient {
         },
         token
       ),
-    listAdminTokenHealthLogs: () => request<AdminAuthTokenHealthLog[]>("/api/admin/tokens/health-logs", {}, token),
+    listAdminTokenHealthLogs: (params) =>
+      request<AdminAuthTokenHealthLog[]>(`/api/admin/tokens/health-logs${buildQuery(params ? { ...params } : undefined)}`, {}, token),
     listSmtpSettings: () => request<SmtpSettings[]>("/api/admin/smtp", {}, token),
     createSmtpSettings: (payload) =>
       request<SmtpSettings>(
@@ -539,7 +541,8 @@ export function createApiClient(token?: string | null): ApiClient {
         },
         token
       ),
-    listSmtpHealthLogs: () => request<SmtpHealthLog[]>("/api/admin/smtp/health-logs", {}, token),
+    listSmtpHealthLogs: (params) =>
+      request<SmtpHealthLog[]>(`/api/admin/smtp/health-logs${buildQuery(params ? { ...params } : undefined)}`, {}, token),
     testAnySmtpSettings: (payload) =>
       request<{ status: string }>(
         "/api/admin/smtp/test",
@@ -583,7 +586,8 @@ export function createApiClient(token?: string | null): ApiClient {
         token
       ),
     getAdminStatus: () => request<AdminStatus>("/api/admin/status", {}, token),
-    listAdminAuditLogs: () => request<AdminAuditLog[]>("/api/admin/audit-logs", {}, token),
+    listAdminAuditLogs: (params) =>
+      request<AdminAuditLog[]>(`/api/admin/audit-logs${buildQuery(params ? { ...params } : undefined)}`, {}, token),
     runAdminChecks: () =>
       request<{ checked: number; succeeded: number; failed: number }>(
         "/api/admin/jobs/checks/run",

@@ -199,6 +199,13 @@ export interface SmtpHealthLog {
   created_at: string;
 }
 
+export interface AdminLogQuery {
+  days?: number;
+  limit?: number;
+  q?: string;
+  sort?: "asc" | "desc";
+}
+
 export interface AppearanceSettings {
   background_image_url?: string | null;
   light_background_image_url?: string | null;

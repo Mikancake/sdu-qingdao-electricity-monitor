@@ -2,6 +2,7 @@ import smtplib
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from email import policy
 from email.message import EmailMessage
 
 from sqlalchemy import select
@@ -15,6 +16,10 @@ from app.models.smtp_settings import SmtpSettings
 
 
 SMTP_AUTH_FAILURE_LIMIT = 3
+
+
+class DeliveryStatusUnknownError(Exception):
+    """Raised after DATA when the SMTP server may already have accepted the mail."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,8 @@ def _ordered_available_configs(configs: list[SmtpConfig]) -> list[SmtpConfig]:
 
 
 def _classify_smtp_error(exc: BaseException) -> str:
+    if isinstance(exc, DeliveryStatusUnknownError):
+        return "delivery_unknown"
     if isinstance(exc, smtplib.SMTPAuthenticationError):
         return "auth"
     if isinstance(exc, smtplib.SMTPRecipientsRefused):
@@ -245,12 +252,25 @@ def _send_with_config(
     try:
         if config.use_ssl:
             with smtplib.SMTP_SSL(config.host, config.port, timeout=20) as smtp:
-                _login_and_send(smtp, message, config)
+                _login(smtp, config)
+                _send_message_data(smtp, message, config, to_email)
         else:
             with smtplib.SMTP(config.host, config.port, timeout=20) as smtp:
                 if config.use_starttls:
                     smtp.starttls()
-                _login_and_send(smtp, message, config)
+                _login(smtp, config)
+                _send_message_data(smtp, message, config, to_email)
+    except DeliveryStatusUnknownError as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        _record_smtp_health(
+            config,
+            success=True,
+            source=source,
+            recipient_email=to_email,
+            error_kind="delivery_unknown",
+            error_msg=error,
+        )
+        return EmailSendResult(True, error, smtp_id=config.id, smtp_name=config.name)
     except (OSError, smtplib.SMTPException) as exc:
         error_kind = _classify_smtp_error(exc)
         error = f"{type(exc).__name__}: {exc}"
@@ -298,10 +318,32 @@ def send_email(
     return last_result
 
 
-def _login_and_send(smtp: smtplib.SMTP, message: EmailMessage, config: SmtpConfig) -> None:
+def _login(smtp: smtplib.SMTP, config: SmtpConfig) -> None:
     if config.username and config.password:
         smtp.login(config.username, config.password)
-    smtp.send_message(message)
+
+
+def _send_message_data(smtp: smtplib.SMTP, message: EmailMessage, config: SmtpConfig, to_email: str) -> None:
+    from_email = config.from_email or ""
+    smtp.ehlo_or_helo_if_needed()
+
+    sender_code, sender_response = smtp.mail(from_email)
+    if sender_code != 250:
+        raise smtplib.SMTPSenderRefused(sender_code, sender_response, from_email)
+
+    recipient_code, recipient_response = smtp.rcpt(to_email)
+    if recipient_code not in (250, 251):
+        raise smtplib.SMTPRecipientsRefused({to_email: (recipient_code, recipient_response)})
+
+    try:
+        data_code, data_response = smtp.data(message.as_bytes(policy=policy.SMTP))
+    except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
+        raise DeliveryStatusUnknownError(
+            "SMTP connection broke after message DATA was submitted; retry was suppressed to avoid duplicate email"
+        ) from exc
+
+    if data_code != 250:
+        raise smtplib.SMTPDataError(data_code, data_response)
 
 
 def send_verification_code(to_email: str, code: str) -> EmailSendResult:

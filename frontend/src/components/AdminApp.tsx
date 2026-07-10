@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryCharging,
   Building2,
   Bell,
+  ChevronDown,
   Database,
   Edit3,
   KeyRound,
@@ -13,6 +15,7 @@ import {
   Moon,
   Play,
   Save,
+  Search,
   ScrollText,
   Server,
   ShieldCheck,
@@ -28,6 +31,7 @@ import type {
   AdminAuditLog,
   AdminAuthToken,
   AdminAuthTokenHealthLog,
+  AdminLogQuery,
   AdminManagedUser,
   AdminManagedUserDetail,
   AdminRoom,
@@ -47,6 +51,159 @@ const ADMIN_TOKEN_KEY = "sdu-electricity-admin-token";
 const ADMIN_THEME_KEY = "sdu-electricity-theme";
 
 type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "settings" | "account" | "audit";
+type SortDirection = "asc" | "desc";
+type LogFilters = Required<Pick<AdminLogQuery, "days" | "limit" | "q" | "sort">>;
+
+const DEFAULT_LOG_FILTERS: LogFilters = { days: 7, limit: 200, q: "", sort: "desc" };
+
+function normalizeText(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function matchesSearch(search: string, values: unknown[]) {
+  const keyword = normalizeText(search);
+  if (!keyword) {
+    return true;
+  }
+  return values.some((value) => normalizeText(value).includes(keyword));
+}
+
+function compareText(a: unknown, b: unknown, direction: SortDirection = "asc") {
+  const result = normalizeText(a).localeCompare(normalizeText(b), "zh-CN", { numeric: true, sensitivity: "base" });
+  return direction === "asc" ? result : -result;
+}
+
+function compareNumber(a: number, b: number, direction: SortDirection = "asc") {
+  const result = a - b;
+  return direction === "asc" ? result : -result;
+}
+
+function compareDate(a?: string | null, b?: string | null, direction: SortDirection = "desc") {
+  const left = a ? new Date(a).getTime() : 0;
+  const right = b ? new Date(b).getTime() : 0;
+  const result = left - right;
+  return direction === "asc" ? result : -result;
+}
+
+function ToolbarSelect({
+  ariaLabel,
+  value,
+  onChange,
+  children
+}: {
+  ariaLabel: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="admin-toolbar-select">
+      <span className="sr-only">{ariaLabel}</span>
+      <select aria-label={ariaLabel} value={value} onChange={(event) => onChange(event.target.value)}>
+        {children}
+      </select>
+      <ChevronDown aria-hidden="true" size={16} />
+    </label>
+  );
+}
+
+function ListToolbar({
+  search,
+  onSearchChange,
+  sort,
+  onSortChange,
+  sortOptions,
+  placeholder
+}: {
+  search: string;
+  onSearchChange: (value: string) => void;
+  sort: string;
+  onSortChange: (value: string) => void;
+  sortOptions: Array<{ value: string; label: string }>;
+  placeholder: string;
+}) {
+  return (
+    <div className="admin-toolbar mb-3">
+      <div className="admin-toolbar-search">
+        <Search aria-hidden="true" size={17} />
+        <Input
+          className="admin-toolbar-input"
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder={placeholder}
+        />
+      </div>
+      <ToolbarSelect
+        ariaLabel="排序方式"
+        value={sort}
+        onChange={onSortChange}
+      >
+        {sortOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </ToolbarSelect>
+    </div>
+  );
+}
+
+function LogToolbar({
+  filters,
+  onChange
+}: {
+  filters: LogFilters;
+  onChange: (filters: LogFilters) => void;
+}) {
+  function patch(next: Partial<LogFilters>) {
+    onChange({ ...filters, ...next });
+  }
+
+  return (
+    <div className="admin-toolbar mb-3">
+      <div className="admin-toolbar-search">
+        <Search aria-hidden="true" size={17} />
+        <Input
+          className="admin-toolbar-input"
+          value={filters.q}
+          onChange={(event) => patch({ q: event.target.value })}
+          placeholder="搜索名称、来源、邮箱或错误"
+        />
+      </div>
+      <ToolbarSelect
+        ariaLabel="日志时间范围"
+        value={filters.days}
+        onChange={(value) => patch({ days: Number(value) })}
+      >
+        <option value={1}>最近 1 天</option>
+        <option value={7}>最近 7 天</option>
+        <option value={30}>最近 30 天</option>
+        <option value={90}>最近 90 天</option>
+        <option value={365}>最近 365 天</option>
+        <option value={0}>全部时间</option>
+      </ToolbarSelect>
+      <ToolbarSelect
+        ariaLabel="日志排序方式"
+        value={filters.sort}
+        onChange={(value) => patch({ sort: value as SortDirection })}
+      >
+        <option value="desc">时间从新到旧</option>
+        <option value="asc">时间从旧到新</option>
+      </ToolbarSelect>
+      <ToolbarSelect
+        ariaLabel="日志显示条数"
+        value={filters.limit}
+        onChange={(value) => patch({ limit: Number(value) })}
+      >
+        <option value={100}>最多 100 条</option>
+        <option value={200}>最多 200 条</option>
+        <option value={500}>最多 500 条</option>
+        <option value={1000}>最多 1000 条</option>
+        <option value={0}>显示全部</option>
+      </ToolbarSelect>
+    </div>
+  );
+}
 
 function describeError(error: unknown) {
   if (error instanceof ApiError) {
@@ -466,6 +623,8 @@ function UsersPanel({
   const [notificationVerified, setNotificationVerified] = useState(false);
   const [userCooldown, setUserCooldown] = useState("");
   const [userNotifyCooldown, setUserNotifyCooldown] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+  const [userSort, setUserSort] = useState("created_desc");
 
   useEffect(() => {
     if (!detail) {
@@ -477,6 +636,28 @@ function UsersPanel({
     setUserNotifyCooldown(detail.notify_cooldown_hours?.toString() ?? "");
   }, [detail]);
 
+  const visibleUsers = useMemo(() => {
+    return [...users]
+      .filter((user) =>
+        matchesSearch(userSearch, [
+          user.id,
+          user.email,
+          user.notification_email,
+          user.is_verified ? "已验证" : "未验证",
+          user.notification_email_verified ? "提醒邮箱已验证" : "提醒邮箱待验证",
+          user.room_count
+        ])
+      )
+      .sort((a, b) => {
+        if (userSort === "email_asc") return compareText(a.email, b.email, "asc");
+        if (userSort === "email_desc") return compareText(a.email, b.email, "desc");
+        if (userSort === "rooms_desc") return compareNumber(a.room_count, b.room_count, "desc");
+        if (userSort === "rooms_asc") return compareNumber(a.room_count, b.room_count, "asc");
+        if (userSort === "created_asc") return compareDate(a.created_at, b.created_at, "asc");
+        return compareDate(a.created_at, b.created_at, "desc");
+      });
+  }, [users, userSearch, userSort]);
+
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
       <Card>
@@ -485,6 +666,21 @@ function UsersPanel({
           <p className="mt-1 text-xs text-muted-foreground">查看注册用户、邮箱验证状态和绑定宿舍数量。</p>
         </CardHeader>
         <CardContent>
+          <ListToolbar
+            search={userSearch}
+            onSearchChange={setUserSearch}
+            sort={userSort}
+            onSortChange={setUserSort}
+            placeholder="搜索邮箱、用户 ID 或状态"
+            sortOptions={[
+              { value: "created_desc", label: "注册时间从新到旧" },
+              { value: "created_asc", label: "注册时间从旧到新" },
+              { value: "email_asc", label: "邮箱 A-Z" },
+              { value: "email_desc", label: "邮箱 Z-A" },
+              { value: "rooms_desc", label: "宿舍数从多到少" },
+              { value: "rooms_asc", label: "宿舍数从少到多" }
+            ]}
+          />
           {loading ? (
             <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 animate-spin" size={18} />
@@ -502,7 +698,14 @@ function UsersPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((user) => (
+                  {visibleUsers.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={4}>
+                        没有匹配的用户
+                      </td>
+                    </tr>
+                  ) : (
+                    visibleUsers.map((user) => (
                     <tr
                       key={user.id}
                       className={`cursor-pointer border-t border-border transition hover:bg-muted/60 ${
@@ -525,7 +728,8 @@ function UsersPanel({
                       <td className="px-4 py-3 text-muted-foreground">{user.room_count}</td>
                       <td className="px-4 py-3 text-muted-foreground">{formatDateTime(user.created_at)}</td>
                     </tr>
-                  ))}
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -660,6 +864,49 @@ function AdminRoomsPanel({
   deletingBindingId?: number | null;
   onDeleteBinding: (userId: number, bindingId: number) => void;
 }) {
+  const [roomSearch, setRoomSearch] = useState("");
+  const [roomSort, setRoomSort] = useState("newest_desc");
+
+  function newestBindingAt(item: AdminRoom) {
+    return item.bindings.reduce<string | null>((latest, binding) => {
+      if (!latest || new Date(binding.created_at).getTime() > new Date(latest).getTime()) {
+        return binding.created_at;
+      }
+      return latest;
+    }, null);
+  }
+
+  const visibleRooms = useMemo(() => {
+    return [...rooms]
+      .filter((item) =>
+        matchesSearch(roomSearch, [
+          item.room.id,
+          item.room.campus,
+          item.room.building_name,
+          item.room.room_number,
+          item.binding_count,
+          ...item.bindings.flatMap((binding) => [
+            binding.email,
+            binding.notification_email,
+            binding.enabled ? "启用" : "停用",
+            binding.notification_email_verified ? "已验证" : "未验证"
+          ])
+        ])
+      )
+      .sort((a, b) => {
+        if (roomSort === "building_asc") {
+          return compareText(`${a.room.building_name} ${a.room.room_number}`, `${b.room.building_name} ${b.room.room_number}`, "asc");
+        }
+        if (roomSort === "building_desc") {
+          return compareText(`${a.room.building_name} ${a.room.room_number}`, `${b.room.building_name} ${b.room.room_number}`, "desc");
+        }
+        if (roomSort === "bindings_desc") return compareNumber(a.binding_count, b.binding_count, "desc");
+        if (roomSort === "bindings_asc") return compareNumber(a.binding_count, b.binding_count, "asc");
+        if (roomSort === "newest_asc") return compareDate(newestBindingAt(a), newestBindingAt(b), "asc");
+        return compareDate(newestBindingAt(a), newestBindingAt(b), "desc");
+      });
+  }, [rooms, roomSearch, roomSort]);
+
   return (
     <Card>
       <CardHeader>
@@ -667,6 +914,21 @@ function AdminRoomsPanel({
         <p className="mt-1 text-xs text-muted-foreground">按当前绑定关系统计宿舍，删除绑定后这里会同步减少。</p>
       </CardHeader>
       <CardContent>
+        <ListToolbar
+          search={roomSearch}
+          onSearchChange={setRoomSearch}
+          sort={roomSort}
+          onSortChange={setRoomSort}
+          placeholder="搜索楼栋、房间、绑定邮箱"
+          sortOptions={[
+            { value: "newest_desc", label: "最近绑定从新到旧" },
+            { value: "newest_asc", label: "最近绑定从旧到新" },
+            { value: "building_asc", label: "宿舍名称 A-Z" },
+            { value: "building_desc", label: "宿舍名称 Z-A" },
+            { value: "bindings_desc", label: "绑定人数从多到少" },
+            { value: "bindings_asc", label: "绑定人数从少到多" }
+          ]}
+        />
         {loading ? (
           <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 animate-spin" size={18} />
@@ -690,15 +952,16 @@ function AdminRoomsPanel({
                 </tr>
               </thead>
               <tbody>
-                {rooms.map((item) => {
-                  const newestBinding = item.bindings.reduce<string | null>((latest, binding) => {
-                    if (!latest || new Date(binding.created_at).getTime() > new Date(latest).getTime()) {
-                      return binding.created_at;
-                    }
-                    return latest;
-                  }, null);
-
-                  return (
+                {visibleRooms.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>
+                      没有匹配的宿舍
+                    </td>
+                  </tr>
+                ) : (
+                  visibleRooms.map((item) => {
+                    const newestBinding = newestBindingAt(item);
+                    return (
                     <tr key={item.room.id} className="border-t border-border align-top">
                       <td className="px-4 py-3">
                         <div className="font-medium">
@@ -749,8 +1012,9 @@ function AdminRoomsPanel({
                         </div>
                       </td>
                     </tr>
-                  );
-                })}
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -770,7 +1034,10 @@ function TokenPanel({
   onToggle,
   onDelete,
   saving,
-  testingTokenId
+  testingTokenId,
+  logsLoading,
+  logFilters,
+  onLogFiltersChange
 }: {
   tokens: AdminAuthToken[];
   logs: AdminAuthTokenHealthLog[];
@@ -785,6 +1052,9 @@ function TokenPanel({
   onDelete: (tokenId: number) => void;
   saving: boolean;
   testingTokenId: number | null;
+  logsLoading: boolean;
+  logFilters: LogFilters;
+  onLogFiltersChange: (filters: LogFilters) => void;
 }) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -794,6 +1064,32 @@ function TokenPanel({
   const [editValue, setEditValue] = useState("");
   const [editInterval, setEditInterval] = useState(10);
   const [editEnabled, setEditEnabled] = useState(true);
+  const [tokenSearch, setTokenSearch] = useState("");
+  const [tokenSort, setTokenSort] = useState("last_used_desc");
+
+  const visibleTokens = useMemo(() => {
+    return [...tokens]
+      .filter((token) =>
+        matchesSearch(tokenSearch, [
+          token.id,
+          token.name,
+          token.token_preview,
+          token.enabled ? "启用" : "停用",
+          healthLabel(token.health_status),
+          token.last_error_kind,
+          token.last_error_msg
+        ])
+      )
+      .sort((a, b) => {
+        if (tokenSort === "name_asc") return compareText(a.name, b.name, "asc");
+        if (tokenSort === "name_desc") return compareText(a.name, b.name, "desc");
+        if (tokenSort === "interval_asc") return compareNumber(a.min_interval_seconds, b.min_interval_seconds, "asc");
+        if (tokenSort === "interval_desc") return compareNumber(a.min_interval_seconds, b.min_interval_seconds, "desc");
+        if (tokenSort === "failures_desc") return compareNumber(a.failure_count, b.failure_count, "desc");
+        if (tokenSort === "last_used_asc") return compareDate(a.last_used_at, b.last_used_at, "asc");
+        return compareDate(a.last_used_at, b.last_used_at, "desc");
+      });
+  }, [tokens, tokenSearch, tokenSort]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -860,6 +1156,22 @@ function TokenPanel({
           <CardTitle>Token 池</CardTitle>
         </CardHeader>
         <CardContent>
+          <ListToolbar
+            search={tokenSearch}
+            onSearchChange={setTokenSearch}
+            sort={tokenSort}
+            onSortChange={setTokenSort}
+            placeholder="搜索 Token 名称、状态或错误"
+            sortOptions={[
+              { value: "last_used_desc", label: "最近使用从新到旧" },
+              { value: "last_used_asc", label: "最近使用从旧到新" },
+              { value: "name_asc", label: "名称 A-Z" },
+              { value: "name_desc", label: "名称 Z-A" },
+              { value: "failures_desc", label: "失败次数从多到少" },
+              { value: "interval_asc", label: "间隔从短到长" },
+              { value: "interval_desc", label: "间隔从长到短" }
+            ]}
+          />
           {loading ? (
             <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 animate-spin" size={18} />
@@ -879,7 +1191,14 @@ function TokenPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {tokens.map((token) => (
+                  {visibleTokens.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>
+                        没有匹配的 Token
+                      </td>
+                    </tr>
+                  ) : (
+                    visibleTokens.map((token) => (
                     <tr key={token.id} className="border-t border-border">
                       {editingId === token.id ? (
                         <>
@@ -966,7 +1285,8 @@ function TokenPanel({
                         </>
                       )}
                     </tr>
-                  ))}
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -979,7 +1299,14 @@ function TokenPanel({
           <CardTitle>Token 健康日志</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-hidden rounded-lg border border-border">
+          <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
+          {logsLoading ? (
+            <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 animate-spin" size={18} />
+              正在读取 Token 日志
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
@@ -1017,6 +1344,7 @@ function TokenPanel({
               </tbody>
             </table>
           </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -1031,7 +1359,10 @@ function SmtpPanel({
   onDelete,
   onTest,
   saving,
-  testingSmtpId
+  testingSmtpId,
+  logsLoading,
+  logFilters,
+  onLogFiltersChange
 }: {
   accounts: SmtpSettings[];
   logs: SmtpHealthLog[];
@@ -1055,6 +1386,9 @@ function SmtpPanel({
   onTest: (smtpId: number, email: string) => void;
   saving: boolean;
   testingSmtpId: number | null;
+  logsLoading: boolean;
+  logFilters: LogFilters;
+  onLogFiltersChange: (filters: LogFilters) => void;
 }) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -1077,6 +1411,35 @@ function SmtpPanel({
   const [editUseSsl, setEditUseSsl] = useState(true);
   const [editUseStarttls, setEditUseStarttls] = useState(false);
   const [testEmails, setTestEmails] = useState<Record<number, string>>({});
+  const [smtpSearch, setSmtpSearch] = useState("");
+  const [smtpSort, setSmtpSort] = useState("last_used_desc");
+
+  const visibleAccounts = useMemo(() => {
+    return [...accounts]
+      .filter((item) =>
+        matchesSearch(smtpSearch, [
+          item.id,
+          item.name,
+          item.host,
+          item.port,
+          item.username,
+          item.from_email,
+          item.enabled ? "启用" : "停用",
+          healthLabel(item.health_status),
+          item.last_error_kind,
+          item.last_error_msg
+        ])
+      )
+      .sort((a, b) => {
+        if (smtpSort === "name_asc") return compareText(a.name, b.name, "asc");
+        if (smtpSort === "name_desc") return compareText(a.name, b.name, "desc");
+        if (smtpSort === "host_asc") return compareText(`${a.host}:${a.port}`, `${b.host}:${b.port}`, "asc");
+        if (smtpSort === "host_desc") return compareText(`${a.host}:${a.port}`, `${b.host}:${b.port}`, "desc");
+        if (smtpSort === "failures_desc") return compareNumber(a.failure_count, b.failure_count, "desc");
+        if (smtpSort === "last_used_asc") return compareDate(a.last_used_at, b.last_used_at, "asc");
+        return compareDate(a.last_used_at, b.last_used_at, "desc");
+      });
+  }, [accounts, smtpSearch, smtpSort]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -1189,6 +1552,22 @@ function SmtpPanel({
           <CardTitle>SMTP 池</CardTitle>
         </CardHeader>
         <CardContent>
+          <ListToolbar
+            search={smtpSearch}
+            onSearchChange={setSmtpSearch}
+            sort={smtpSort}
+            onSortChange={setSmtpSort}
+            placeholder="搜索 SMTP 名称、地址、发件邮箱或错误"
+            sortOptions={[
+              { value: "last_used_desc", label: "最近使用从新到旧" },
+              { value: "last_used_asc", label: "最近使用从旧到新" },
+              { value: "name_asc", label: "名称 A-Z" },
+              { value: "name_desc", label: "名称 Z-A" },
+              { value: "host_asc", label: "地址 A-Z" },
+              { value: "host_desc", label: "地址 Z-A" },
+              { value: "failures_desc", label: "失败次数从多到少" }
+            ]}
+          />
           <div className="overflow-hidden rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
@@ -1207,8 +1586,14 @@ function SmtpPanel({
                       暂无后台 SMTP 配置；如果 .env 配了 SMTP，系统仍会用 .env 作为兜底。
                     </td>
                   </tr>
+                ) : visibleAccounts.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={5}>
+                      没有匹配的 SMTP
+                    </td>
+                  </tr>
                 ) : (
-                  accounts.map((item) => (
+                  visibleAccounts.map((item) => (
                     <tr key={item.id} className="border-t border-border">
                       {editingId === item.id ? (
                         <>
@@ -1324,7 +1709,14 @@ function SmtpPanel({
           <CardTitle>SMTP 健康日志</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-hidden rounded-lg border border-border">
+          <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
+          {logsLoading ? (
+            <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 animate-spin" size={18} />
+              正在读取 SMTP 日志
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
@@ -1364,6 +1756,7 @@ function SmtpPanel({
               </tbody>
             </table>
           </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -1726,7 +2119,17 @@ function AccountPanel({
   );
 }
 
-function AuditPanel({ logs, loading }: { logs: Array<{ id: number; action: string; target_type: string; target_id?: string | null; detail?: string | null; created_at: string }>; loading: boolean }) {
+function AuditPanel({
+  logs,
+  loading,
+  filters,
+  onFiltersChange
+}: {
+  logs: AdminAuditLog[];
+  loading: boolean;
+  filters: LogFilters;
+  onFiltersChange: (filters: LogFilters) => void;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -1734,6 +2137,7 @@ function AuditPanel({ logs, loading }: { logs: Array<{ id: number; action: strin
         <p className="mt-1 text-xs text-muted-foreground">记录管理员最近的配置修改操作。</p>
       </CardHeader>
       <CardContent>
+        <LogToolbar filters={filters} onChange={onFiltersChange} />
         {loading ? (
           <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 animate-spin" size={18} />
@@ -1751,7 +2155,14 @@ function AuditPanel({ logs, loading }: { logs: Array<{ id: number; action: strin
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log) => (
+                {logs.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={4}>
+                      暂无审计日志
+                    </td>
+                  </tr>
+                ) : (
+                  logs.map((log) => (
                   <tr key={log.id} className="border-t border-border">
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDateTime(log.created_at)}</td>
                     <td className="px-4 py-3 font-medium">{log.action}</td>
@@ -1760,7 +2171,8 @@ function AuditPanel({ logs, loading }: { logs: Array<{ id: number; action: strin
                     </td>
                     <td className="max-w-[420px] truncate px-4 py-3 text-muted-foreground">{log.detail ?? "--"}</td>
                   </tr>
-                ))}
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -1777,6 +2189,9 @@ export function AdminApp() {
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem(ADMIN_THEME_KEY) === "dark");
+  const [tokenLogFilters, setTokenLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
+  const [smtpLogFilters, setSmtpLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
+  const [auditLogFilters, setAuditLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
   const api = useMemo(() => createApiClient(token), [token]);
 
   const meQuery = useQuery({ queryKey: ["admin-me"], queryFn: api.getAdminMe, enabled: Boolean(token) });
@@ -1788,12 +2203,24 @@ export function AdminApp() {
   });
   const adminRoomsQuery = useQuery({ queryKey: ["admin-rooms"], queryFn: api.listAdminRooms, enabled: Boolean(token) });
   const tokensQuery = useQuery({ queryKey: ["admin-tokens"], queryFn: api.listAdminTokens, enabled: Boolean(token) });
-  const tokenLogsQuery = useQuery({ queryKey: ["admin-token-health-logs"], queryFn: api.listAdminTokenHealthLogs, enabled: Boolean(token) });
+  const tokenLogsQuery = useQuery({
+    queryKey: ["admin-token-health-logs", tokenLogFilters],
+    queryFn: () => api.listAdminTokenHealthLogs(tokenLogFilters),
+    enabled: Boolean(token)
+  });
   const smtpQuery = useQuery({ queryKey: ["admin-smtp"], queryFn: api.listSmtpSettings, enabled: Boolean(token) });
-  const smtpLogsQuery = useQuery({ queryKey: ["admin-smtp-health-logs"], queryFn: api.listSmtpHealthLogs, enabled: Boolean(token) });
+  const smtpLogsQuery = useQuery({
+    queryKey: ["admin-smtp-health-logs", smtpLogFilters],
+    queryFn: () => api.listSmtpHealthLogs(smtpLogFilters),
+    enabled: Boolean(token)
+  });
   const appearanceQuery = useQuery({ queryKey: ["admin-appearance"], queryFn: api.getAppearanceSettings, enabled: Boolean(token) });
   const runtimeQuery = useQuery({ queryKey: ["admin-runtime"], queryFn: api.getRuntimeSettings, enabled: Boolean(token) });
-  const auditLogsQuery = useQuery({ queryKey: ["admin-audit-logs"], queryFn: api.listAdminAuditLogs, enabled: Boolean(token) });
+  const auditLogsQuery = useQuery({
+    queryKey: ["admin-audit-logs", auditLogFilters],
+    queryFn: () => api.listAdminAuditLogs(auditLogFilters),
+    enabled: Boolean(token)
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -2195,6 +2622,9 @@ export function AdminApp() {
               tokens={tokensQuery.data ?? []}
               logs={tokenLogsQuery.data ?? []}
               loading={tokensQuery.isLoading}
+              logsLoading={tokenLogsQuery.isLoading}
+              logFilters={tokenLogFilters}
+              onLogFiltersChange={setTokenLogFilters}
               saving={createTokenMutation.isPending}
               onCreate={(payload) => createTokenMutation.mutate(payload)}
               onUpdate={(id, payload) => updateTokenMutation.mutate({ id, payload })}
@@ -2209,6 +2639,9 @@ export function AdminApp() {
             <SmtpPanel
               accounts={smtpQuery.data ?? []}
               logs={smtpLogsQuery.data ?? []}
+              logsLoading={smtpLogsQuery.isLoading}
+              logFilters={smtpLogFilters}
+              onLogFiltersChange={setSmtpLogFilters}
               saving={createSmtpMutation.isPending}
               testingSmtpId={smtpTestMutation.variables?.id ?? null}
               onCreate={(payload) => createSmtpMutation.mutate(payload)}
@@ -2249,7 +2682,12 @@ export function AdminApp() {
           ) : null}
 
           {activeView === "audit" ? (
-            <AuditPanel logs={(auditLogsQuery.data ?? []) as AdminAuditLog[]} loading={auditLogsQuery.isLoading} />
+            <AuditPanel
+              logs={(auditLogsQuery.data ?? []) as AdminAuditLog[]}
+              loading={auditLogsQuery.isLoading}
+              filters={auditLogFilters}
+              onFiltersChange={setAuditLogFilters}
+            />
           ) : null}
         </main>
       </div>
