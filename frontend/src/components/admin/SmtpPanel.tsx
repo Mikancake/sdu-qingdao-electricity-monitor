@@ -4,6 +4,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Input, Label } from "../ui/input";
+import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar, LogToolbar } from "./toolbars";
 import { compareDate, compareNumber, compareText, healthLabel, healthTone, LogFilters, matchesSearch } from "./utils";
 import { Edit3, Loader2, Mail, Save, Trash2, X } from "lucide-react";
@@ -226,8 +227,8 @@ export function SmtpPanel({
               { value: "failures_desc", label: "失败次数从多到少" }
             ]}
           />
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full border-collapse text-sm">
+          <div className="responsive-table-shell rounded-lg border border-border">
+            <table className="responsive-table w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3 font-medium">名称</th>
@@ -240,13 +241,13 @@ export function SmtpPanel({
               <tbody>
                 {accounts.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={5}>
+                    <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={5}>
                       暂无后台 SMTP 配置；如果 .env 配了 SMTP，系统仍会用 .env 作为兜底。
                     </td>
                   </tr>
                 ) : visibleAccounts.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={5}>
+                    <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={5}>
                       没有匹配的 SMTP
                     </td>
                   </tr>
@@ -255,14 +256,14 @@ export function SmtpPanel({
                     <tr key={item.id} className="border-t border-border">
                       {editingId === item.id ? (
                         <>
-                          <td className="px-4 py-3">
+                          <td data-label="名称" className="px-4 py-3">
                             <Input value={editName} onChange={(event) => setEditName(event.target.value)} />
                             <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                               <input className="h-4 w-4 accent-primary" type="checkbox" checked={editEnabled} onChange={(event) => setEditEnabled(event.target.checked)} />
                               启用
                             </label>
                           </td>
-                          <td className="px-4 py-3">
+                          <td data-label="地址" className="px-4 py-3">
                             <div className="grid gap-2">
                               <Input value={editHost} onChange={(event) => setEditHost(event.target.value)} placeholder="SMTP Host" />
                               <Input type="number" value={editPort} onChange={(event) => setEditPort(Number(event.target.value))} placeholder="端口" />
@@ -282,11 +283,11 @@ export function SmtpPanel({
                               </div>
                             </div>
                           </td>
-                          <td className="px-4 py-3">
+                          <td data-label="健康" className="px-4 py-3">
                             <Badge tone={healthTone(item.health_status)}>{healthLabel(item.health_status)}</Badge>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">保存后测试</td>
-                          <td className="px-4 py-3">
+                          <td data-label="测试" className="px-4 py-3 text-muted-foreground">保存后测试</td>
+                          <td data-label="操作" className="px-4 py-3">
                             <div className="flex justify-end gap-2">
                               <Button size="icon" variant="secondary" title="保存" onClick={() => saveEdit(item)}>
                                 <Save size={15} />
@@ -299,18 +300,18 @@ export function SmtpPanel({
                         </>
                       ) : (
                         <>
-                          <td className="px-4 py-3">
+                          <td data-label="名称" className="px-4 py-3">
                             <div className="font-medium">{item.name}</div>
                             <Badge className="mt-1" tone={item.enabled ? "success" : "muted"}>
                               {item.enabled ? "启用" : "停用"}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">
+                          <td data-label="地址" className="px-4 py-3 text-muted-foreground">
                             <div>{item.host}:{item.port}</div>
                             <div className="mt-1">{item.from_email}</div>
                             <div className="mt-1 text-xs">间隔 {item.min_interval_seconds}s，最近使用 {formatDateTime(item.last_used_at)}</div>
                           </td>
-                          <td className="px-4 py-3">
+                          <td data-label="健康" className="px-4 py-3">
                             <Badge tone={healthTone(item.health_status)}>{healthLabel(item.health_status)}</Badge>
                             <div className="mt-1 text-xs text-muted-foreground">失败 {item.failure_count}</div>
                             {item.last_error_msg ? (
@@ -319,8 +320,8 @@ export function SmtpPanel({
                               </div>
                             ) : null}
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex min-w-[240px] gap-2">
+                          <td data-label="测试" className="px-4 py-3">
+                            <div className="flex min-w-0 gap-2 sm:min-w-[240px]">
                               <Input
                                 type="email"
                                 value={testEmails[item.id] ?? ""}
@@ -338,8 +339,8 @@ export function SmtpPanel({
                               </Button>
                             </div>
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
+                          <td data-label="操作" className="px-4 py-3">
+                            <div className="flex flex-wrap justify-end gap-2">
                               <Button size="icon" variant="secondary" title="编辑" onClick={() => startEdit(item)}>
                                 <Edit3 size={15} />
                               </Button>
@@ -369,13 +370,10 @@ export function SmtpPanel({
         <CardContent>
           <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
           {logsLoading ? (
-            <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 animate-spin" size={18} />
-              正在读取 SMTP 日志
-            </div>
+            <ListSkeleton rows={4} />
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full border-collapse text-sm">
+            <div className="responsive-table-shell rounded-lg border border-border">
+            <table className="responsive-table w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3 font-medium">时间</th>
@@ -389,23 +387,23 @@ export function SmtpPanel({
               <tbody>
                 {logs.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>
+                    <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={6}>
                       暂无 SMTP 健康日志
                     </td>
                   </tr>
                 ) : (
                   logs.map((log) => (
                     <tr key={log.id} className="border-t border-border">
-                      <td className="px-4 py-3 text-muted-foreground">{formatDateTime(log.created_at)}</td>
-                      <td className="px-4 py-3">{log.smtp_name ?? `#${log.smtp_id ?? "-"}`}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{log.source}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{log.recipient_email ?? "-"}</td>
-                      <td className="px-4 py-3">
+                      <td data-label="时间" className="px-4 py-3 text-muted-foreground">{formatDateTime(log.created_at)}</td>
+                      <td data-label="SMTP" className="px-4 py-3">{log.smtp_name ?? `#${log.smtp_id ?? "-"}`}</td>
+                      <td data-label="来源" className="px-4 py-3 text-muted-foreground">{log.source}</td>
+                      <td data-label="收件人" className="px-4 py-3 text-muted-foreground">{log.recipient_email ?? "-"}</td>
+                      <td data-label="结果" className="px-4 py-3">
                         <Badge tone={log.success ? "success" : healthTone(log.health_status)}>
                           {log.success ? "成功" : healthLabel(log.health_status)}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
+                      <td data-label="错误" className="px-4 py-3 text-muted-foreground">
                         {log.error_kind ? `${log.error_kind}: ${log.error_msg ?? ""}` : "-"}
                       </td>
                     </tr>

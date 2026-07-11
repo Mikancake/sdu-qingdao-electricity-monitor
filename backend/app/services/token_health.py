@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.models.auth_token import AuthToken
 from app.models.auth_token_health_log import AuthTokenHealthLog
 
@@ -52,3 +53,26 @@ def record_token_health(
             failure_count=token.failure_count or 0,
         )
     )
+
+
+def record_reserved_token_health(
+    token_id: int,
+    *,
+    success: bool,
+    source: str,
+    error_kind: str | None = None,
+    error_msg: str | None = None,
+) -> None:
+    with SessionLocal() as db:
+        token = db.get(AuthToken, token_id)
+        if token is None:
+            return
+        record_token_health(
+            db,
+            token,
+            success=success,
+            source=source,
+            error_kind=error_kind,
+            error_msg=error_msg,
+        )
+        db.commit()

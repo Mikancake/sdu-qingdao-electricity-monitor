@@ -1,4 +1,5 @@
-import { ReactNode } from "react";
+import { useEffect } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   BatteryCharging,
   Building2,
@@ -45,8 +46,14 @@ export function AppShell({
   onRefresh,
   onToggleTheme
 }: AppShellProps) {
+  const activeNavIndex = Math.max(0, navItems.findIndex((item) => item.key === activeView));
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [activeView]);
+
   return (
-    <div className="app-background min-h-screen text-foreground">
+    <div className="app-background user-app-shell min-h-screen text-foreground">
       <aside className="app-sidebar liquid-surface glass-panel fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -57,14 +64,20 @@ export function AppShell({
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3 py-4">
+        <nav
+          aria-label="用户主导航"
+          className="user-sidebar-nav relative flex flex-1 flex-col gap-1 px-3 py-4"
+          style={{ "--app-nav-offset": `${activeNavIndex * 2.75}rem` } as CSSProperties}
+        >
+          <span aria-hidden="true" className="app-sidebar-nav-indicator" />
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`app-nav-item flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm ${
+              aria-current={activeView === item.key ? "page" : undefined}
+              className={`app-nav-item relative z-[1] flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm ${
                 activeView === item.key
-                  ? "app-nav-item-active bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "app-nav-item-active text-primary"
+                  : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
               }`}
               onClick={() => onChangeView(item.key)}
               type="button"
@@ -119,13 +132,19 @@ export function AppShell({
           </div>
         </header>
 
-        <nav className="mobile-liquid-nav liquid-surface glass-panel fixed grid grid-cols-4 gap-1 lg:hidden">
+        <nav
+          aria-label="用户移动导航"
+          className="mobile-liquid-nav liquid-surface glass-panel fixed grid grid-cols-4 gap-1 lg:hidden"
+          style={{ "--app-nav-offset": `${activeNavIndex * 100}%` } as CSSProperties}
+        >
+          <span aria-hidden="true" className="mobile-nav-indicator" />
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={`app-nav-item mobile-nav-item flex items-center justify-center gap-1 text-xs ${
+              aria-current={activeView === item.key ? "page" : undefined}
+              className={`app-nav-item mobile-nav-item relative z-[1] flex items-center justify-center gap-1 text-xs ${
                 activeView === item.key
-                  ? "app-nav-item-active bg-primary text-primary-foreground"
+                  ? "app-nav-item-active text-primary"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
               onClick={() => onChangeView(item.key)}
@@ -137,7 +156,9 @@ export function AppShell({
           ))}
         </nav>
 
-        <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-5 lg:px-6 lg:pb-5">{children}</main>
+        <main className="app-main-content mx-auto w-full max-w-7xl px-4 pb-24 pt-5 lg:px-6 lg:pb-5">
+          <div key={activeView} className="page-transition">{children}</div>
+        </main>
       </div>
     </div>
   );

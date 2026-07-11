@@ -18,9 +18,9 @@ const variants: Record<ButtonVariant, string> = {
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 text-xs",
-  md: "h-9 px-4 text-sm",
-  icon: "h-9 w-9 p-0"
+  sm: "h-11 px-3 text-xs md:h-8",
+  md: "h-11 px-4 text-sm md:h-9",
+  icon: "h-11 w-11 p-0 md:h-9 md:w-9"
 };
 
 export function Button({ className, variant = "primary", size = "md", ...props }: ButtonProps) {

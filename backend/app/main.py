@@ -8,8 +8,6 @@ from fastapi.staticfiles import StaticFiles
 from app.api.router import api_router
 from app.core.config import settings, validate_runtime_safety
 from app.core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware, resolve_trusted_hosts
-from app.db.schema import create_schema
-from app.db.session import engine
 
 
 def create_app() -> FastAPI:
@@ -44,11 +42,6 @@ def create_app() -> FastAPI:
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
-
-    @app.on_event("startup")
-    def create_dev_tables() -> None:
-        # MVP convenience: Alembic migrations will replace this once the schema settles.
-        create_schema(engine)
 
     return app
 

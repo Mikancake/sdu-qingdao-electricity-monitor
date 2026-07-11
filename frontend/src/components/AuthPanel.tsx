@@ -91,9 +91,9 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
         : "输入收到的验证码完成账号验证。";
 
   return (
-    <main className="app-background flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="auth-shell glass-card w-full max-w-[1040px] overflow-hidden rounded-lg border border-border shadow-soft">
-        <div className="grid min-h-[620px] lg:grid-cols-[1fr_420px]">
+    <main className="app-background flex min-h-screen items-center justify-center px-4 py-6 sm:py-10">
+      <div className="auth-shell glass-card motion-card w-full max-w-[1040px] overflow-hidden rounded-lg border border-border shadow-soft">
+        <div className="grid min-h-0 lg:min-h-[620px] lg:grid-cols-[1fr_420px]">
           <section className="auth-brand-pane hidden p-8 lg:flex lg:flex-col lg:justify-between">
             <div>
               <div className="flex items-center gap-3">
@@ -166,7 +166,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
 
               <div className="auth-mode-tabs mb-6 flex rounded-lg border border-border/70 p-1">
                 <button
-                  className={`h-8 flex-1 rounded-md text-sm transition ${
+                  className={`h-11 flex-1 rounded-md text-sm transition md:h-8 ${
                     mode === "login" ? "bg-panel/90 text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                   }`}
                   onClick={() => setMode("login")}
@@ -175,7 +175,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                   登录
                 </button>
                 <button
-                  className={`h-8 flex-1 rounded-md text-sm transition ${
+                  className={`h-11 flex-1 rounded-md text-sm transition md:h-8 ${
                     mode !== "login" ? "bg-panel/90 text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                   }`}
                   onClick={() => setMode("register")}
@@ -185,7 +185,7 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
                 </button>
               </div>
 
-              <form className="space-y-4" onSubmit={submit}>
+              <form key={mode} className="auth-mode-transition space-y-4" onSubmit={submit}>
                 <div>
                   <Label htmlFor="email">邮箱</Label>
                   <Input

@@ -20,6 +20,7 @@ type RuntimeNumberSettingKey =
   | "notification_retention_days"
   | "electricity_reading_retention_days"
   | "admin_audit_log_retention_days"
+  | "scheduled_job_run_retention_days"
   | "retention_cleanup_hour";
 
 export function RuntimeSettingsPanel({
@@ -185,6 +186,16 @@ export function RuntimeSettingsPanel({
               min={0}
               value={form.admin_audit_log_retention_days}
               onChange={(event) => setNumber("admin_audit_log_retention_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="scheduled-job-retention">调度执行记录保留（天）</Label>
+            <Input
+              id="scheduled-job-retention"
+              type="number"
+              min={0}
+              value={form.scheduled_job_run_retention_days}
+              onChange={(event) => setNumber("scheduled_job_run_retention_days", event.target.value)}
             />
           </div>
           <div>

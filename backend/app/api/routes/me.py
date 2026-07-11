@@ -48,8 +48,8 @@ from app.services.rate_limit import (
 )
 from app.services.rooms import RoomInputError, normalize_room_data
 from app.services.runtime_settings import get_runtime_config
-from app.services.token_health import record_token_health
-from app.services.token_pool import select_available_token
+from app.services.token_health import record_reserved_token_health
+from app.services.token_pool import reserve_available_token
 from app.services.usage import get_room_usage_stats, list_room_readings
 from app.services.users import delete_user_account
 
@@ -133,7 +133,7 @@ def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
 
 
 def query_room_balance_once(db: Session, room: Room):
-    token = select_available_token(db)
+    token = reserve_available_token()
     if token is None:
         raise HTTPException(
             status_code=503,
@@ -141,10 +141,8 @@ def query_room_balance_once(db: Session, room: Room):
         )
 
     result = CampusElectricityClient(token.token_value).query_room(room)
-    token.last_used_at = datetime.now()
-    record_token_health(
-        db,
-        token,
+    record_reserved_token_health(
+        token.id,
         success=result.success and result.balance is not None,
         source="user",
         error_kind=result.error_kind,

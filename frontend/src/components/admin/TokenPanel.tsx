@@ -4,6 +4,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Input, Label } from "../ui/input";
+import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar, LogToolbar } from "./toolbars";
 import { compareDate, compareNumber, compareText, healthLabel, healthTone, LogFilters, matchesSearch } from "./utils";
 import { Edit3, Loader2, Play, Save, Trash2, X } from "lucide-react";
@@ -158,13 +159,10 @@ export function TokenPanel({
             ]}
           />
           {loading ? (
-            <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 animate-spin" size={18} />
-              正在读取 Token
-            </div>
+            <ListSkeleton rows={4} />
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border">
-              <table className="w-full border-collapse text-sm">
+            <div className="responsive-table-shell rounded-lg border border-border">
+              <table className="responsive-table w-full border-collapse text-sm">
                 <thead className="bg-muted text-left text-xs text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 font-medium">名称</th>
@@ -178,7 +176,7 @@ export function TokenPanel({
                 <tbody>
                   {visibleTokens.length === 0 ? (
                     <tr>
-                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>
+                      <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={6}>
                         没有匹配的 Token
                       </td>
                     </tr>
@@ -187,7 +185,7 @@ export function TokenPanel({
                     <tr key={token.id} className="border-t border-border">
                       {editingId === token.id ? (
                         <>
-                          <td className="px-4 py-3">
+                          <td data-label="名称" className="px-4 py-3">
                             <Input value={editName} onChange={(event) => setEditName(event.target.value)} />
                             <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                               <input
@@ -199,7 +197,7 @@ export function TokenPanel({
                               启用
                             </label>
                           </td>
-                          <td className="px-4 py-3">
+                          <td data-label="Token" className="px-4 py-3">
                             <Input
                               value={editValue}
                               onChange={(event) => setEditValue(event.target.value)}
@@ -207,7 +205,7 @@ export function TokenPanel({
                             />
                             <div className="mt-1 text-xs text-muted-foreground">当前：{token.token_preview}</div>
                           </td>
-                          <td className="px-4 py-3">
+                          <td data-label="间隔" className="px-4 py-3">
                             <Input
                               type="number"
                               min={0}
@@ -215,12 +213,12 @@ export function TokenPanel({
                               onChange={(event) => setEditInterval(Number(event.target.value))}
                             />
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">
+                          <td data-label="健康" className="px-4 py-3 text-muted-foreground">
                             <Badge tone={healthTone(token.health_status)}>{healthLabel(token.health_status)}</Badge>
                             <div className="mt-1 text-xs">失败 {token.failure_count}</div>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatDateTime(token.last_used_at)}</td>
-                          <td className="px-4 py-3">
+                          <td data-label="最近使用" className="px-4 py-3 text-muted-foreground">{formatDateTime(token.last_used_at)}</td>
+                          <td data-label="操作" className="px-4 py-3">
                             <div className="flex justify-end gap-2">
                               <Button size="icon" variant="secondary" title="保存" onClick={() => saveEdit(token.id)}>
                                 <Save size={15} />
@@ -233,15 +231,15 @@ export function TokenPanel({
                         </>
                       ) : (
                         <>
-                          <td className="px-4 py-3">
+                          <td data-label="名称" className="px-4 py-3">
                             <div className="font-medium">{token.name}</div>
                             <Badge className="mt-1" tone={token.enabled ? "success" : "muted"}>
                               {token.enabled ? "启用" : "停用"}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{token.token_preview}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{token.min_interval_seconds}s</td>
-                          <td className="px-4 py-3">
+                          <td data-label="Token" className="px-4 py-3 text-muted-foreground">{token.token_preview}</td>
+                          <td data-label="间隔" className="px-4 py-3 text-muted-foreground">{token.min_interval_seconds}s</td>
+                          <td data-label="健康" className="px-4 py-3">
                             <Badge tone={healthTone(token.health_status)}>{healthLabel(token.health_status)}</Badge>
                             <div className="mt-1 text-xs text-muted-foreground">失败 {token.failure_count}</div>
                             {token.last_error_msg ? (
@@ -250,9 +248,9 @@ export function TokenPanel({
                               </div>
                             ) : null}
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatDateTime(token.last_used_at)}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
+                          <td data-label="最近使用" className="px-4 py-3 text-muted-foreground">{formatDateTime(token.last_used_at)}</td>
+                          <td data-label="操作" className="px-4 py-3">
+                            <div className="flex flex-wrap justify-end gap-2">
                               <Button size="icon" variant="secondary" title="测试 Token" onClick={() => onTest(token.id)}>
                                 {testingTokenId === token.id ? <Loader2 className="animate-spin" size={15} /> : <Play size={15} />}
                               </Button>
@@ -286,13 +284,10 @@ export function TokenPanel({
         <CardContent>
           <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
           {logsLoading ? (
-            <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 animate-spin" size={18} />
-              正在读取 Token 日志
-            </div>
+            <ListSkeleton rows={4} />
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full border-collapse text-sm">
+            <div className="responsive-table-shell rounded-lg border border-border">
+            <table className="responsive-table w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3 font-medium">时间</th>
@@ -305,22 +300,22 @@ export function TokenPanel({
               <tbody>
                 {logs.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={5}>
+                    <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={5}>
                       暂无健康日志
                     </td>
                   </tr>
                 ) : (
                   logs.map((log) => (
                     <tr key={log.id} className="border-t border-border">
-                      <td className="px-4 py-3 text-muted-foreground">{formatDateTime(log.created_at)}</td>
-                      <td className="px-4 py-3">{log.token_name ?? `#${log.token_id ?? "-"}`}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{log.source}</td>
-                      <td className="px-4 py-3">
+                      <td data-label="时间" className="px-4 py-3 text-muted-foreground">{formatDateTime(log.created_at)}</td>
+                      <td data-label="Token" className="px-4 py-3">{log.token_name ?? `#${log.token_id ?? "-"}`}</td>
+                      <td data-label="来源" className="px-4 py-3 text-muted-foreground">{log.source}</td>
+                      <td data-label="结果" className="px-4 py-3">
                         <Badge tone={log.success ? "success" : healthTone(log.health_status)}>
                           {log.success ? "成功" : healthLabel(log.health_status)}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
+                      <td data-label="错误" className="px-4 py-3 text-muted-foreground">
                         {log.error_kind ? `${log.error_kind}: ${log.error_msg ?? ""}` : "-"}
                       </td>
                     </tr>

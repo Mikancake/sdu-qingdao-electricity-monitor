@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.models.admin_user import AdminUser
 from app.schemas.appearance import AppearanceBackgroundUploadOut, AppearanceSettingsOut, AppearanceSettingsUpdate
 from app.services.appearance import get_appearance_settings, update_appearance_settings
-from app.services.appearance_assets import InvalidAppearanceImage, build_preblurred_background
+from app.services.appearance_assets import InvalidAppearanceImage, build_optimized_background, build_preblurred_background
 
 
 router = APIRouter()
@@ -73,28 +73,32 @@ async def upload_appearance_background(
 
     upload_root = Path(settings.upload_dir) / "appearance"
     upload_root.mkdir(parents=True, exist_ok=True)
-    filename = f"{theme}-{uuid4().hex}{suffix}"
+    source_filename = f"{theme}-{uuid4().hex}{suffix}"
+    filename = f"{theme}-{uuid4().hex}.webp"
     blurred_filename = f"{theme}-{uuid4().hex}-blurred.webp"
+    source_target = upload_root / source_filename
     target = upload_root / filename
     blurred_target = upload_root / blurred_filename
 
     written = 0
     try:
-        with target.open("wb") as handle:
+        with source_target.open("wb") as handle:
             while chunk := await file.read(1024 * 1024):
                 written += len(chunk)
                 if written > settings.appearance_upload_max_bytes:
                     raise HTTPException(status_code=413, detail="image is too large")
                 handle.write(chunk)
-        await run_in_threadpool(build_preblurred_background, target, blurred_target)
+        await run_in_threadpool(build_optimized_background, source_target, target)
+        await run_in_threadpool(build_preblurred_background, source_target, blurred_target)
     except InvalidAppearanceImage as exc:
-        _remove_uploads(target, blurred_target)
+        _remove_uploads(source_target, target, blurred_target)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
-        _remove_uploads(target, blurred_target)
+        _remove_uploads(source_target, target, blurred_target)
         raise
     finally:
         await file.close()
+        _remove_uploads(source_target)
 
     url = f"/uploads/appearance/{filename}"
     blurred_url = f"/uploads/appearance/{blurred_filename}"

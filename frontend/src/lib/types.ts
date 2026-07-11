@@ -238,6 +238,7 @@ export interface RuntimeSettings {
   notification_retention_days: number;
   electricity_reading_retention_days: number;
   admin_audit_log_retention_days: number;
+  scheduled_job_run_retention_days: number;
   retention_cleanup_hour: number;
   appearance?: AppearanceSettings | null;
 }
@@ -249,6 +250,7 @@ export interface DataRetentionCleanupResult {
   email_delivery_logs_deleted: number;
   electricity_readings_deleted: number;
   admin_audit_logs_deleted: number;
+  scheduled_job_runs_deleted: number;
   total_deleted: number;
 }
 
@@ -256,6 +258,29 @@ export interface RuntimeLimits {
   manual_check_cooldown_seconds: number;
   notify_cooldown_hours: number;
   max_rooms_per_user: number;
+}
+
+export interface AdminActivityPoint {
+  day: string;
+  readings: number;
+  emails_sent: number;
+  emails_failed: number;
+  checks_succeeded: number;
+  checks_failed: number;
+  new_users: number;
+}
+
+export interface AdminBuildingStat {
+  campus: string;
+  building_key?: string | null;
+  building_name: string;
+  room_count: number;
+  binding_count: number;
+  enabled_binding_count: number;
+  user_count: number;
+  rooms_with_readings: number;
+  average_latest_balance?: string | null;
+  latest_read_at?: string | null;
 }
 
 export interface AdminStatus {
@@ -281,6 +306,8 @@ export interface AdminStatus {
   total_rooms: number;
   total_users: number;
   latest_read_at?: string | null;
+  activity_series: AdminActivityPoint[];
+  building_stats: AdminBuildingStat[];
 }
 
 export interface AdminManagedUser {
@@ -293,6 +320,21 @@ export interface AdminManagedUser {
   notify_cooldown_hours?: number | null;
   room_count: number;
   created_at: string;
+}
+
+export interface AdminPageQuery {
+  page: number;
+  page_size: number;
+  q: string;
+  sort: string;
+}
+
+export interface AdminManagedUserPage {
+  items: AdminManagedUser[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
 }
 
 export interface AdminManagedUserDetail extends AdminManagedUser {
@@ -313,6 +355,17 @@ export interface AdminRoom {
   room: Room;
   binding_count: number;
   bindings: AdminRoomBinding[];
+  latest_balance?: string | null;
+  latest_read_at?: string | null;
+  reading_count: number;
+}
+
+export interface AdminRoomPage {
+  items: AdminRoom[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
 }
 
 

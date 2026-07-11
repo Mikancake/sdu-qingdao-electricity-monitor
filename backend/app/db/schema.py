@@ -201,11 +201,31 @@ def _ensure_secret_column_types(engine: Engine) -> None:
         conn.execute(text("ALTER TABLE smtp_settings ALTER COLUMN password TYPE TEXT"))
 
 
+def _ensure_performance_indexes(engine: Engine) -> None:
+    indexes = {
+        "ix_electricity_readings_room_read_at": ("electricity_readings", "room_id, read_at"),
+        "ix_notifications_binding_kind_status_created": (
+            "notifications",
+            "user_room_id, kind, status, created_at",
+        ),
+        "ix_email_delivery_logs_status_sent_at": ("email_delivery_logs", "status, sent_at"),
+        "ix_email_verification_codes_email_purpose_expires": (
+            "email_verification_codes",
+            "email, purpose, expires_at",
+        ),
+        "ix_user_rooms_enabled_room": ("user_rooms", "enabled, room_id"),
+    }
+    with engine.begin() as conn:
+        for name, (table_name, columns) in indexes.items():
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table_name} ({columns})"))
+
+
 def create_schema(engine: Engine, *, ensure_admin: bool = True) -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_existing_columns(engine)
     _ensure_existing_columns(engine)
     _ensure_secret_column_types(engine)
+    _ensure_performance_indexes(engine)
     _backfill_existing_data(engine)
     if not ensure_admin:
         return

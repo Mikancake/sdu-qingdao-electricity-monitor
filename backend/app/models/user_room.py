@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -14,7 +14,10 @@ if TYPE_CHECKING:
 
 class UserRoom(Base):
     __tablename__ = "user_rooms"
-    __table_args__ = (UniqueConstraint("user_id", "room_id", name="uq_user_room"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "room_id", name="uq_user_room"),
+        Index("ix_user_rooms_enabled_room", "enabled", "room_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)

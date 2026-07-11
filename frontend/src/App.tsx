@@ -5,18 +5,13 @@ import { ApiError, createApiClient, getApiErrorMessage } from "./lib/api";
 import type { UserRoomBinding } from "./lib/types";
 import { AuthPanel } from "./components/AuthPanel";
 import { AppShell, type ViewKey } from "./components/AppShell";
-import type { ChartRangeState } from "./components/DashboardView";
+import { DashboardView, type ChartRangeState } from "./components/DashboardView";
 import { NoticeDialog } from "./components/NoticeDialog";
+import { RecordsView } from "./components/RecordsView";
+import { RoomsView } from "./components/RoomsView";
+import { SettingsView } from "./components/SettingsView";
 
 const AdminApp = lazy(() => import("./components/AdminApp").then((module) => ({ default: module.AdminApp })));
-const DashboardView = lazy(() =>
-  import("./components/DashboardView").then((module) => ({ default: module.DashboardView }))
-);
-const RecordsView = lazy(() => import("./components/RecordsView").then((module) => ({ default: module.RecordsView })));
-const RoomsView = lazy(() => import("./components/RoomsView").then((module) => ({ default: module.RoomsView })));
-const SettingsView = lazy(() =>
-  import("./components/SettingsView").then((module) => ({ default: module.SettingsView }))
-);
 
 const TOKEN_KEY = "sdu-electricity-token";
 const THEME_KEY = "sdu-electricity-theme";

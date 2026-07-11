@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -8,6 +8,7 @@ from app.db.base import Base
 
 class EmailDeliveryLog(Base):
     __tablename__ = "email_delivery_logs"
+    __table_args__ = (Index("ix_email_delivery_logs_status_sent_at", "status", "sent_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     smtp_settings_id: Mapped[int | None] = mapped_column(

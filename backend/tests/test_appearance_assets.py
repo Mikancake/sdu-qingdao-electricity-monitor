@@ -5,7 +5,7 @@ from PIL import Image
 
 from app.schemas.appearance import AppearanceSettingsUpdate
 from app.services import appearance_assets
-from app.services.appearance_assets import InvalidAppearanceImage, build_preblurred_background
+from app.services.appearance_assets import InvalidAppearanceImage, build_optimized_background, build_preblurred_background
 
 
 def test_build_preblurred_background_creates_small_webp(tmp_path: Path) -> None:
@@ -18,6 +18,18 @@ def test_build_preblurred_background_creates_small_webp(tmp_path: Path) -> None:
     with Image.open(destination) as result:
         assert result.format == "WEBP"
         assert max(result.size) <= 720
+
+
+def test_build_optimized_background_creates_display_webp(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    destination = tmp_path / "display.webp"
+    Image.new("RGB", (3200, 1800), (24, 72, 140)).save(source)
+
+    build_optimized_background(source, destination)
+
+    with Image.open(destination) as result:
+        assert result.format == "WEBP"
+        assert max(result.size) <= 2560
 
 
 def test_build_preblurred_background_rejects_non_image(tmp_path: Path) -> None:

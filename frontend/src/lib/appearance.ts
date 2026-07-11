@@ -117,8 +117,10 @@ export function applyAppearanceSettings(settings?: Partial<AppearanceSettings> |
   root.style.setProperty("--app-bg-position", next.background_position ?? "center");
   root.style.setProperty("--app-bg-overlay-opacity", String(next.background_overlay_opacity));
   root.style.setProperty("--app-bg-blur", `${next.background_blur_px}px`);
+  root.style.setProperty("--app-bg-blur-ratio", String(next.background_blur_px / 18));
   root.style.setProperty("--glass-card-opacity", String(next.glass_card_opacity));
   root.style.setProperty("--glass-card-blur", `${next.glass_blur_px}px`);
+  root.style.setProperty("--glass-blur-ratio", String(next.glass_blur_px / 16));
   root.style.setProperty("--glass-material-strength", String(0.28 + (next.glass_blur_px / 16) * 0.42));
   root.dataset.glassMode = next.glass_effect_mode;
   root.dataset.backgroundBlur = next.background_blur_px > 0 ? "on" : "off";

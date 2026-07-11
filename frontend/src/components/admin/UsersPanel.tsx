@@ -1,13 +1,14 @@
-import { AdminManagedUser, AdminManagedUserDetail } from "../../lib/types";
+import type { AdminManagedUserDetail, AdminManagedUserPage, AdminPageQuery } from "../../lib/types";
 import { formatDateTime } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Input, Label } from "../ui/input";
+import { PaginationControls } from "../ui/pagination";
+import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar } from "./toolbars";
-import { compareDate, compareNumber, compareText, matchesSearch } from "./utils";
 import { Loader2, Save, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 export function AdminUserRoomEditor({
   binding,
@@ -157,7 +158,9 @@ export function AdminUserRoomEditor({
 }
 
 export function UsersPanel({
-  users,
+  pageData,
+  query,
+  onQueryChange,
   detail,
   loading,
   detailLoading,
@@ -168,7 +171,9 @@ export function UsersPanel({
   onDeleteUser,
   onDeleteRoom
 }: {
-  users: AdminManagedUser[];
+  pageData?: AdminManagedUserPage;
+  query: AdminPageQuery;
+  onQueryChange: (query: AdminPageQuery) => void;
   detail?: AdminManagedUserDetail;
   loading: boolean;
   detailLoading: boolean;
@@ -202,8 +207,7 @@ export function UsersPanel({
   const [notificationVerified, setNotificationVerified] = useState(false);
   const [userCooldown, setUserCooldown] = useState("");
   const [userNotifyCooldown, setUserNotifyCooldown] = useState("");
-  const [userSearch, setUserSearch] = useState("");
-  const [userSort, setUserSort] = useState("created_desc");
+  const [userSearch, setUserSearch] = useState(query.q);
 
   useEffect(() => {
     if (!detail) {
@@ -215,27 +219,15 @@ export function UsersPanel({
     setUserNotifyCooldown(detail.notify_cooldown_hours?.toString() ?? "");
   }, [detail]);
 
-  const visibleUsers = useMemo(() => {
-    return [...users]
-      .filter((user) =>
-        matchesSearch(userSearch, [
-          user.id,
-          user.email,
-          user.notification_email,
-          user.is_verified ? "已验证" : "未验证",
-          user.notification_email_verified ? "提醒邮箱已验证" : "提醒邮箱待验证",
-          user.room_count
-        ])
-      )
-      .sort((a, b) => {
-        if (userSort === "email_asc") return compareText(a.email, b.email, "asc");
-        if (userSort === "email_desc") return compareText(a.email, b.email, "desc");
-        if (userSort === "rooms_desc") return compareNumber(a.room_count, b.room_count, "desc");
-        if (userSort === "rooms_asc") return compareNumber(a.room_count, b.room_count, "asc");
-        if (userSort === "created_asc") return compareDate(a.created_at, b.created_at, "asc");
-        return compareDate(a.created_at, b.created_at, "desc");
-      });
-  }, [users, userSearch, userSort]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (userSearch === query.q) return;
+      onQueryChange({ ...query, page: 1, q: userSearch });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [onQueryChange, query, userSearch]);
+
+  const visibleUsers = pageData?.items ?? [];
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
@@ -248,8 +240,8 @@ export function UsersPanel({
           <ListToolbar
             search={userSearch}
             onSearchChange={setUserSearch}
-            sort={userSort}
-            onSortChange={setUserSort}
+            sort={query.sort}
+            onSortChange={(sort) => onQueryChange({ ...query, page: 1, sort })}
             placeholder="搜索邮箱、用户 ID 或状态"
             sortOptions={[
               { value: "created_desc", label: "注册时间从新到旧" },
@@ -261,13 +253,11 @@ export function UsersPanel({
             ]}
           />
           {loading ? (
-            <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 animate-spin" size={18} />
-              正在读取用户
-            </div>
+            <ListSkeleton rows={5} />
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border">
-              <table className="w-full border-collapse text-sm">
+            <>
+            <div className="responsive-table-shell rounded-lg border border-border">
+              <table className="responsive-table w-full border-collapse text-sm">
                 <thead className="bg-muted text-left text-xs text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 font-medium">用户</th>
@@ -279,7 +269,7 @@ export function UsersPanel({
                 <tbody>
                   {visibleUsers.length === 0 ? (
                     <tr>
-                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={4}>
+                      <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={4}>
                         没有匹配的用户
                       </td>
                     </tr>
@@ -292,26 +282,35 @@ export function UsersPanel({
                       }`}
                       onClick={() => onSelectUser(user.id)}
                     >
-                      <td className="px-4 py-3">
+                      <td data-label="用户" className="px-4 py-3">
                         <div className="font-medium">{user.email}</div>
                         <Badge className="mt-1" tone={user.is_verified ? "success" : "warning"}>
                           {user.is_verified ? "已验证" : "未验证"}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3">
+                      <td data-label="提醒邮箱" className="px-4 py-3">
                         <div className="max-w-[240px] truncate text-muted-foreground">{user.notification_email || user.email}</div>
                         <Badge className="mt-1" tone={user.notification_email_verified || !user.notification_email ? "success" : "warning"}>
                           {user.notification_email_verified || !user.notification_email ? "可用" : "待验证"}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{user.room_count}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{formatDateTime(user.created_at)}</td>
+                      <td data-label="宿舍" className="px-4 py-3 text-muted-foreground">{user.room_count}</td>
+                      <td data-label="注册时间" className="px-4 py-3 text-muted-foreground">{formatDateTime(user.created_at)}</td>
                     </tr>
                     ))
                   )}
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              page={pageData?.page ?? query.page}
+              pageSize={pageData?.page_size ?? query.page_size}
+              total={pageData?.total ?? 0}
+              totalPages={pageData?.total_pages ?? 1}
+              onPageChange={(page) => onQueryChange({ ...query, page })}
+              onPageSizeChange={(pageSize) => onQueryChange({ ...query, page: 1, page_size: pageSize })}
+            />
+            </>
           )}
         </CardContent>
       </Card>

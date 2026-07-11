@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -178,6 +178,7 @@ class RuntimeSettingsOut(BaseModel):
     notification_retention_days: int
     electricity_reading_retention_days: int
     admin_audit_log_retention_days: int
+    scheduled_job_run_retention_days: int
     retention_cleanup_hour: int
 
 
@@ -198,6 +199,7 @@ class RuntimeSettingsUpdate(BaseModel):
     notification_retention_days: int | None = Field(default=None, ge=0, le=3650)
     electricity_reading_retention_days: int | None = Field(default=None, ge=0, le=3650)
     admin_audit_log_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    scheduled_job_run_retention_days: int | None = Field(default=None, ge=0, le=3650)
     retention_cleanup_hour: int | None = Field(default=None, ge=0, le=23)
 
 
@@ -208,6 +210,7 @@ class DataRetentionCleanupOut(BaseModel):
     email_delivery_logs_deleted: int
     electricity_readings_deleted: int
     admin_audit_logs_deleted: int
+    scheduled_job_runs_deleted: int
     total_deleted: int
 
 
@@ -219,6 +222,29 @@ class RateLimitClearRequest(BaseModel):
 
 class RateLimitClearOut(BaseModel):
     cleared_keys: int
+
+
+class AdminActivityPoint(BaseModel):
+    day: date
+    readings: int
+    emails_sent: int
+    emails_failed: int
+    checks_succeeded: int
+    checks_failed: int
+    new_users: int
+
+
+class AdminBuildingStat(BaseModel):
+    campus: str
+    building_key: str | None
+    building_name: str
+    room_count: int
+    binding_count: int
+    enabled_binding_count: int
+    user_count: int
+    rooms_with_readings: int
+    average_latest_balance: Decimal | None
+    latest_read_at: datetime | None
 
 
 class AdminStatusOut(BaseModel):
@@ -244,6 +270,8 @@ class AdminStatusOut(BaseModel):
     total_rooms: int
     total_users: int
     latest_read_at: datetime | None
+    activity_series: list[AdminActivityPoint] = Field(default_factory=list)
+    building_stats: list[AdminBuildingStat] = Field(default_factory=list)
 
 
 class AdminManagedUserOut(BaseModel):
@@ -260,6 +288,14 @@ class AdminManagedUserOut(BaseModel):
 
 class AdminManagedUserDetailOut(AdminManagedUserOut):
     rooms: list[UserRoomOut]
+
+
+class AdminManagedUserPageOut(BaseModel):
+    items: list[AdminManagedUserOut]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
 
 
 class AdminManagedUserUpdate(BaseModel):
@@ -292,6 +328,17 @@ class AdminRoomOut(BaseModel):
     room: RoomOut
     binding_count: int
     bindings: list[AdminRoomBindingOut]
+    latest_balance: Decimal | None
+    latest_read_at: datetime | None
+    reading_count: int
+
+
+class AdminRoomPageOut(BaseModel):
+    items: list[AdminRoomOut]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
 
 
 class AdminAuditLogOut(BaseModel):

@@ -1,10 +1,11 @@
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 
 import type { CheckAttempt } from "../lib/types";
 import { formatDateTime, formatKwh } from "../lib/utils";
 import { EmptyState } from "./EmptyState";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { ListSkeleton } from "./ui/skeleton";
 
 interface RecordsViewProps {
   attempts: CheckAttempt[];
@@ -30,15 +31,12 @@ export function RecordsView({ attempts, loading }: RecordsViewProps) {
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 animate-spin" size={18} />
-            正在读取查询记录
-          </div>
+          <ListSkeleton rows={5} />
         ) : attempts.length === 0 ? (
           <EmptyState title="暂无查询记录" description="绑定宿舍并刷新电量后，这里会显示每次查询的结果。" />
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full border-collapse text-sm">
+          <div className="responsive-table-shell rounded-lg border border-border">
+            <table className="responsive-table w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3 font-medium">时间</th>
@@ -52,21 +50,21 @@ export function RecordsView({ attempts, loading }: RecordsViewProps) {
               <tbody>
                 {attempts.map((attempt) => (
                   <tr key={attempt.id} className="border-t border-border">
-                    <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDateTime(attempt.started_at)}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="时间" className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDateTime(attempt.started_at)}</td>
+                    <td data-label="宿舍" className="px-4 py-3">
                       <div className="font-medium">
                         {attempt.room.building_name} {attempt.room.room_number}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{sourceLabel(attempt.source)}</td>
-                    <td className="px-4 py-3">{attempt.success ? formatKwh(attempt.balance) : "--"}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="来源" className="px-4 py-3 text-muted-foreground">{sourceLabel(attempt.source)}</td>
+                    <td data-label="电量" className="px-4 py-3">{attempt.success ? formatKwh(attempt.balance) : "--"}</td>
+                    <td data-label="状态" className="px-4 py-3">
                       <Badge tone={attempt.success ? "success" : "danger"}>
                         {attempt.success ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
                         {attempt.success ? "成功" : "失败"}
                       </Badge>
                     </td>
-                    <td className="max-w-[260px] truncate px-4 py-3 text-muted-foreground">
+                    <td data-label="详情" className="max-w-[260px] truncate px-4 py-3 text-muted-foreground">
                       {attempt.success ? "已保存读数" : attempt.error_msg ?? attempt.error_kind ?? "未知错误"}
                     </td>
                   </tr>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 
 import { ApiError, createApiClient } from "../lib/api";
-import type { AdminAuditLog } from "../lib/types";
+import type { AdminAuditLog, AdminPageQuery } from "../lib/types";
 import { Button } from "./ui/button";
 import { NoticeDialog } from "./NoticeDialog";
 import { AccountPanel } from "./admin/AccountPanel";
@@ -27,6 +28,8 @@ import { SmtpPanel } from "./admin/SmtpPanel";
 import { StatusPanel } from "./admin/StatusPanel";
 import { TokenPanel } from "./admin/TokenPanel";
 import { UsersPanel } from "./admin/UsersPanel";
+import { MobileAdminNav } from "./admin/MobileAdminNav";
+import type { AdminNavItem } from "./admin/MobileAdminNav";
 import { ADMIN_THEME_KEY, ADMIN_TOKEN_KEY, DEFAULT_LOG_FILTERS, describeError } from "./admin/utils";
 import type { AdminView, LogFilters } from "./admin/utils";
 
@@ -46,12 +49,25 @@ export function AdminApp() {
   const [tokenLogFilters, setTokenLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
   const [smtpLogFilters, setSmtpLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
   const [auditLogFilters, setAuditLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
+  const [userListQuery, setUserListQuery] = useState<AdminPageQuery>({
+    page: 1,
+    page_size: 30,
+    q: "",
+    sort: "created_desc"
+  });
+  const [roomListQuery, setRoomListQuery] = useState<AdminPageQuery>({
+    page: 1,
+    page_size: 20,
+    q: "",
+    sort: "newest_desc"
+  });
   const api = useMemo(() => createApiClient(token), [token]);
 
   const meQuery = useQuery({ queryKey: ["admin-me"], queryFn: api.getAdminMe, enabled: Boolean(token) });
   const usersQuery = useQuery({
-    queryKey: ["admin-users"],
-    queryFn: api.listAdminUsers,
+    queryKey: ["admin-users", userListQuery],
+    queryFn: () => api.listAdminUsersPage(userListQuery),
+    placeholderData: (previous) => previous,
     enabled: Boolean(token && activeView === "users")
   });
   const userDetailQuery = useQuery({
@@ -60,8 +76,9 @@ export function AdminApp() {
     enabled: Boolean(token && activeView === "users" && selectedUserId)
   });
   const adminRoomsQuery = useQuery({
-    queryKey: ["admin-rooms"],
-    queryFn: api.listAdminRooms,
+    queryKey: ["admin-rooms", roomListQuery],
+    queryFn: () => api.listAdminRoomsPage(roomListQuery),
+    placeholderData: (previous) => previous,
     enabled: Boolean(token && activeView === "rooms")
   });
   const tokensQuery = useQuery({
@@ -110,6 +127,10 @@ export function AdminApp() {
       handleLogout();
     }
   }, [meQuery.error]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [activeView]);
 
   function handleLogin(nextToken: string) {
     window.localStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
@@ -367,7 +388,7 @@ export function AdminApp() {
     return <AdminLogin onLogin={handleLogin} />;
   }
 
-  const nav: Array<{ key: AdminView; label: string; icon: JSX.Element }> = [
+  const nav: AdminNavItem[] = [
     { key: "status", label: "状态", icon: <Server size={17} /> },
     { key: "users", label: "用户", icon: <Users size={17} /> },
     { key: "rooms", label: "宿舍", icon: <Building2 size={17} /> },
@@ -377,9 +398,10 @@ export function AdminApp() {
     { key: "account", label: "账号", icon: <ShieldCheck size={17} /> },
     { key: "audit", label: "审计", icon: <ScrollText size={17} /> }
   ];
+  const activeNavIndex = Math.max(0, nav.findIndex((item) => item.key === activeView));
 
   return (
-    <div className="app-background min-h-screen text-foreground">
+    <div className="app-background admin-app-shell min-h-screen text-foreground">
       <aside className="app-sidebar liquid-surface glass-panel fixed inset-y-0 left-0 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -390,14 +412,19 @@ export function AdminApp() {
             <div className="text-xs text-muted-foreground">{meQuery.data?.username ?? "管理后台"}</div>
           </div>
         </div>
-        <nav className="flex-1 space-y-1 px-3 py-4">
+        <nav
+          className="admin-sidebar-nav relative flex flex-1 flex-col gap-1 px-3 py-4"
+          style={{ "--admin-nav-index": activeNavIndex } as CSSProperties}
+        >
+          <span aria-hidden="true" className="admin-nav-indicator" />
           {nav.map((item) => (
             <button
               key={item.key}
-              className={`app-nav-item flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm ${
+              aria-current={activeView === item.key ? "page" : undefined}
+              className={`app-nav-item relative z-[1] flex h-9 w-full shrink-0 items-center gap-3 rounded-md px-3 text-sm ${
                 activeView === item.key
-                  ? "app-nav-item-active bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "app-nav-item-active text-primary"
+                  : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
               }`}
               onClick={() => setActiveView(item.key)}
               type="button"
@@ -447,27 +474,11 @@ export function AdminApp() {
           </div>
         </header>
 
-        <nav className="admin-mobile-nav liquid-surface glass-panel flex gap-1 overflow-x-auto border-b border-border/70 px-3 py-2 lg:hidden">
-          {nav.map((item) => (
-            <button
-              key={item.key}
-              className={`app-nav-item flex h-9 min-w-[78px] items-center justify-center gap-2 rounded-md px-2 text-xs ${
-                activeView === item.key
-                  ? "app-nav-item-active bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
-              onClick={() => setActiveView(item.key)}
-              type="button"
-            >
-              {item.icon}
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        <MobileAdminNav activeView={activeView} items={nav} onChange={setActiveView} />
 
-        <main className="mx-auto w-full max-w-7xl px-4 py-5 lg:px-6">
+        <main className="app-main-content mx-auto w-full max-w-7xl px-4 pb-24 pt-5 lg:px-6 lg:pb-5">
           <NoticeDialog message={notice} onClose={() => setNotice(null)} />
-
+          <div key={activeView} className="page-transition">
           {activeView === "status" ? (
             <StatusPanel
               onRunChecks={() => runChecksMutation.mutate()}
@@ -479,7 +490,9 @@ export function AdminApp() {
 
           {activeView === "users" ? (
             <UsersPanel
-              users={usersQuery.data ?? []}
+              pageData={usersQuery.data}
+              query={userListQuery}
+              onQueryChange={setUserListQuery}
               detail={userDetailQuery.data}
               loading={usersQuery.isLoading}
               detailLoading={userDetailQuery.isLoading}
@@ -504,7 +517,9 @@ export function AdminApp() {
 
           {activeView === "rooms" ? (
             <AdminRoomsPanel
-              rooms={adminRoomsQuery.data ?? []}
+              pageData={adminRoomsQuery.data}
+              query={roomListQuery}
+              onQueryChange={setRoomListQuery}
               loading={adminRoomsQuery.isLoading}
               deletingBindingId={deleteManagedUserRoomMutation.variables?.bindingId ?? null}
               onDeleteBinding={(userId, bindingId) => {
@@ -587,6 +602,7 @@ export function AdminApp() {
               onFiltersChange={setAuditLogFilters}
             />
           ) : null}
+          </div>
         </main>
       </div>
     </div>

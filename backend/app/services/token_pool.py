@@ -1,9 +1,17 @@
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.models.auth_token import AuthToken
+
+
+@dataclass(frozen=True)
+class ReservedToken:
+    id: int
+    token_value: str
 
 
 def now_like(value: datetime | None = None) -> datetime:
@@ -40,3 +48,14 @@ def select_available_token(db: Session) -> AuthToken | None:
         db.flush()
         return token
     return None
+
+
+def reserve_available_token() -> ReservedToken | None:
+    """Atomically reserve a token in a short transaction before network I/O."""
+    with SessionLocal() as db:
+        token = select_available_token(db)
+        if token is None:
+            return None
+        reserved = ReservedToken(id=token.id, token_value=token.token_value)
+        db.commit()
+        return reserved

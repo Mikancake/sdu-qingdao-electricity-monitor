@@ -1,12 +1,12 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
-from app.api.routes import admin_appearance, admin_logs, admin_status
+from app.api.routes import admin_appearance, admin_logs, admin_rooms, admin_status
 from app.api.routes.admin_common import audit, next_smtp_id, smtp_out, token_out
 from app.api.routes.auth import ensure_email_shape, normalize_email
 from app.core.security import DUMMY_PASSWORD_HASH, hash_password, password_needs_rehash, sign_access_token, verify_password
@@ -22,12 +22,11 @@ from app.schemas.admin import (
     AdminAuthTokenOut,
     AdminAuthTokenUpdate,
     AdminHealthTestOut,
-    AdminRoomBindingOut,
-    AdminRoomOut,
     AdminTokenHealthTestRequest,
     AdminLogin,
     AdminManagedUserDetailOut,
     AdminManagedUserOut,
+    AdminManagedUserPageOut,
     AdminManagedUserRoomUpdate,
     AdminManagedUserUpdate,
     AdminPasswordUpdate,
@@ -59,6 +58,7 @@ from app.services.users import delete_user_account
 router = APIRouter()
 router.include_router(admin_appearance.router)
 router.include_router(admin_logs.router)
+router.include_router(admin_rooms.router)
 router.include_router(admin_status.router)
 
 
@@ -125,8 +125,9 @@ def update_admin_password(
     )
 
 
-def _managed_user_out(db: Session, user: User) -> AdminManagedUserOut:
-    room_count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user.id)) or 0
+def _managed_user_out(db: Session, user: User, *, room_count: int | None = None) -> AdminManagedUserOut:
+    if room_count is None:
+        room_count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user.id)) or 0
     return AdminManagedUserOut(
         id=user.id,
         email=user.email,
@@ -145,8 +146,68 @@ def list_users(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> list[AdminManagedUserOut]:
-    users = db.scalars(select(User).order_by(User.created_at.desc(), User.id.desc()))
-    return [_managed_user_out(db, user) for user in users]
+    room_counts = (
+        select(UserRoom.user_id.label("user_id"), func.count(UserRoom.id).label("room_count"))
+        .group_by(UserRoom.user_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(User, func.coalesce(room_counts.c.room_count, 0))
+        .outerjoin(room_counts, room_counts.c.user_id == User.id)
+        .order_by(User.created_at.desc(), User.id.desc())
+    )
+    return [_managed_user_out(db, user, room_count=int(room_count)) for user, room_count in rows]
+
+
+@router.get("/users/page", response_model=AdminManagedUserPageOut)
+def list_users_page(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=10, le=100),
+    q: str | None = Query(default=None, max_length=120),
+    sort: str = Query(default="created_desc", pattern="^(created|email|rooms)_(asc|desc)$"),
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> AdminManagedUserPageOut:
+    room_counts = (
+        select(UserRoom.user_id.label("user_id"), func.count(UserRoom.id).label("room_count"))
+        .group_by(UserRoom.user_id)
+        .subquery()
+    )
+    filters = []
+    keyword = (q or "").strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        search_terms = [User.email.ilike(pattern), User.notification_email.ilike(pattern)]
+        if keyword.isdigit():
+            search_terms.append(User.id == int(keyword))
+        filters.append(or_(*search_terms))
+
+    total = int(db.scalar(select(func.count(User.id)).where(*filters)) or 0)
+    room_count_value = func.coalesce(room_counts.c.room_count, 0)
+    order_columns = {
+        "created_asc": (User.created_at.asc(), User.id.asc()),
+        "created_desc": (User.created_at.desc(), User.id.desc()),
+        "email_asc": (User.email.asc(), User.id.asc()),
+        "email_desc": (User.email.desc(), User.id.desc()),
+        "rooms_asc": (room_count_value.asc(), User.id.asc()),
+        "rooms_desc": (room_count_value.desc(), User.id.desc()),
+    }
+    rows = db.execute(
+        select(User, room_count_value)
+        .outerjoin(room_counts, room_counts.c.user_id == User.id)
+        .where(*filters)
+        .order_by(*order_columns[sort])
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = [_managed_user_out(db, user, room_count=int(room_count)) for user, room_count in rows]
+    return AdminManagedUserPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=max(1, (total + page_size - 1) // page_size),
+    )
 
 
 @router.get("/users/{user_id}", response_model=AdminManagedUserDetailOut)
@@ -168,44 +229,6 @@ def get_user_detail(
     )
     base = _managed_user_out(db, user)
     return AdminManagedUserDetailOut(**base.model_dump(), rooms=rooms)
-
-
-@router.get("/rooms", response_model=list[AdminRoomOut])
-def list_admin_rooms(
-    _: AdminUser = Depends(current_admin),
-    db: Session = Depends(db_session),
-) -> list[AdminRoomOut]:
-    rooms = list(
-        db.scalars(
-            select(Room)
-            .join(UserRoom, UserRoom.room_id == Room.id)
-            .options(selectinload(Room.user_rooms).selectinload(UserRoom.user))
-            .distinct()
-            .order_by(Room.building_name, Room.room_number, Room.id)
-        )
-    )
-    result: list[AdminRoomOut] = []
-    for room in rooms:
-        bindings = sorted(room.user_rooms, key=lambda item: item.id)
-        result.append(
-            AdminRoomOut(
-                room=room,
-                binding_count=len(bindings),
-                bindings=[
-                    AdminRoomBindingOut(
-                        binding_id=binding.id,
-                        user_id=binding.user_id,
-                        email=binding.user.email if binding.user else "",
-                        notification_email=binding.user.notification_email if binding.user else None,
-                        notification_email_verified=binding.user.notification_email_verified if binding.user else False,
-                        enabled=binding.enabled,
-                        created_at=binding.created_at,
-                    )
-                    for binding in bindings
-                ],
-            )
-        )
-    return result
 
 
 @router.patch("/users/{user_id}", response_model=AdminManagedUserDetailOut)

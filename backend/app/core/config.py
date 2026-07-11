@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     notification_retention_days: int = Field(default=90, validation_alias="NOTIFICATION_RETENTION_DAYS")
     electricity_reading_retention_days: int = Field(default=365, validation_alias="ELECTRICITY_READING_RETENTION_DAYS")
     admin_audit_log_retention_days: int = Field(default=365, validation_alias="ADMIN_AUDIT_LOG_RETENTION_DAYS")
+    scheduled_job_run_retention_days: int = Field(default=90, validation_alias="SCHEDULED_JOB_RUN_RETENTION_DAYS")
     retention_cleanup_hour: int = Field(default=3, validation_alias="RETENTION_CLEANUP_HOUR")
     upload_dir: str = Field(default="./uploads", validation_alias="UPLOAD_DIR")
     appearance_upload_max_bytes: int = Field(

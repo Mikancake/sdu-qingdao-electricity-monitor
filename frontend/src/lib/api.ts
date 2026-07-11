@@ -7,7 +7,10 @@ import type {
   AdminAuditLog,
   AdminLoginResponse,
   AdminManagedUser,
+  AdminManagedUserPage,
+  AdminPageQuery,
   AdminRoom,
+  AdminRoomPage,
   AdminManagedUserDetail,
   AdminStatus,
   AdminUser,
@@ -172,6 +175,7 @@ export interface ApiClient {
   updateAdminProfile: (payload: { display_name?: string | null }) => Promise<AdminUser>;
   updateAdminPassword: (payload: { old_password: string; new_password: string }) => Promise<AdminLoginResponse>;
   listAdminUsers: () => Promise<AdminManagedUser[]>;
+  listAdminUsersPage: (params: AdminPageQuery) => Promise<AdminManagedUserPage>;
   getAdminUser: (userId: number) => Promise<AdminManagedUserDetail>;
   updateAdminUser: (
     userId: number,
@@ -203,6 +207,11 @@ export interface ApiClient {
   ) => Promise<UserRoomBinding>;
   deleteAdminUserRoom: (userId: number, bindingId: number) => Promise<void>;
   listAdminRooms: () => Promise<AdminRoom[]>;
+  listAdminRoomsPage: (params: AdminPageQuery) => Promise<AdminRoomPage>;
+  listAdminRoomReadings: (
+    roomId: number,
+    params?: { days?: number; start_at?: string; end_at?: string; limit?: number }
+  ) => Promise<Reading[]>;
   listAdminTokens: () => Promise<AdminAuthToken[]>;
   createAdminToken: (payload: {
     name: string;
@@ -445,6 +454,8 @@ export function createApiClient(token?: string | null): ApiClient {
         token
       ),
     listAdminUsers: () => request<AdminManagedUser[]>("/api/admin/users", {}, token),
+    listAdminUsersPage: (params) =>
+      request<AdminManagedUserPage>(`/api/admin/users/page${buildQuery({ ...params })}`, {}, token),
     getAdminUser: (userId) => request<AdminManagedUserDetail>(`/api/admin/users/${userId}`, {}, token),
     updateAdminUser: (userId, payload) =>
       request<AdminManagedUserDetail>(
@@ -481,6 +492,10 @@ export function createApiClient(token?: string | null): ApiClient {
         token
       ),
     listAdminRooms: () => request<AdminRoom[]>("/api/admin/rooms", {}, token),
+    listAdminRoomsPage: (params) =>
+      request<AdminRoomPage>(`/api/admin/rooms/page${buildQuery({ ...params })}`, {}, token),
+    listAdminRoomReadings: (roomId, params) =>
+      request<Reading[]>(`/api/admin/rooms/${roomId}/readings${buildQuery(params)}`, {}, token),
     listAdminTokens: () => request<AdminAuthToken[]>("/api/admin/tokens", {}, token),
     createAdminToken: (payload) =>
       request<AdminAuthToken>(

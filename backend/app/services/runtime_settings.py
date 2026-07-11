@@ -26,6 +26,7 @@ class RuntimeConfig:
     notification_retention_days: int = settings.notification_retention_days
     electricity_reading_retention_days: int = settings.electricity_reading_retention_days
     admin_audit_log_retention_days: int = settings.admin_audit_log_retention_days
+    scheduled_job_run_retention_days: int = settings.scheduled_job_run_retention_days
     retention_cleanup_hour: int = settings.retention_cleanup_hour
 
 

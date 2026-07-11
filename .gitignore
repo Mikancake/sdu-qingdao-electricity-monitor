@@ -37,6 +37,7 @@ rooms.json
 venv/
 env/
 node_modules/
+.pnpm-store/
 frontend/node_modules/
 frontend/dist/
 backend/uploads/

@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, BatteryCharging, Building2, Clock, Loader2, RefreshCcw, Zap } from "lucide-react";
+import { AlertTriangle, BatteryCharging, Building2, Clock, Zap } from "lucide-react";
 
 import type { Reading, UserRoomSummary } from "../lib/types";
 import { formatDateTime, formatDays, formatKwh, formatKwhPerDay } from "../lib/utils";
 import { EmptyState } from "./EmptyState";
+import { CooldownRefreshButton } from "./CooldownRefreshButton";
 import { PowerChart } from "./PowerChart";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input, Label, Select } from "./ui/input";
+import { DashboardSkeleton, Skeleton } from "./ui/skeleton";
 
 export type ChartRangeKey = "1d" | "7d" | "30d" | "all" | "custom";
 
@@ -34,13 +35,6 @@ interface DashboardViewProps {
 
 function selectPrimaryRoom(summaries: UserRoomSummary[]) {
   return summaries.find((item) => item.enabled) ?? summaries[0];
-}
-
-function cooldownSecondsUntil(value?: string | null, now = Date.now()) {
-  if (!value) {
-    return 0;
-  }
-  return Math.max(0, Math.ceil((new Date(value).getTime() - now) / 1000));
 }
 
 function hasMeasuredAverage(item: UserRoomSummary) {
@@ -135,23 +129,12 @@ export function DashboardView({
   onCheckRoom,
   onGoRooms
 }: DashboardViewProps) {
-  const [now, setNow] = useState(() => Date.now());
   const primary = summaries.find((item) => item.binding_id === selectedBindingId) ?? selectPrimaryRoom(summaries);
   const lowCount = summaries.filter((item) => item.usage.is_low_power).length;
   const enabledCount = summaries.filter((item) => item.enabled).length;
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   if (loading) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center text-muted-foreground">
-        <Loader2 className="mr-2 animate-spin" size={18} />
-        正在读取电量数据
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   if (!primary) {
@@ -165,14 +148,12 @@ export function DashboardView({
     );
   }
 
-  const cooldownSeconds = cooldownSecondsUntil(primary.manual_check_available_at, now);
   const checking = checkingId === primary.binding_id;
-  const checkDisabled = checking || cooldownSeconds > 0;
 
   return (
     <div className="space-y-5">
       <section className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="min-h-[148px]">
+        <Card className="power-summary-card power-summary-card-primary min-h-[148px]">
           <CardContent className="flex h-full items-center justify-between">
             <div>
               <div className="text-xs text-muted-foreground">当前电量</div>
@@ -183,7 +164,7 @@ export function DashboardView({
           </CardContent>
         </Card>
 
-        <Card className="min-h-[148px]">
+        <Card className="power-summary-card min-h-[148px]">
           <CardContent className="flex h-full items-center justify-between gap-4">
             <div>
               <div className="text-xs text-muted-foreground">预计剩余</div>
@@ -194,7 +175,7 @@ export function DashboardView({
           </CardContent>
         </Card>
 
-        <Card className="min-h-[148px]">
+        <Card className="power-summary-card min-h-[148px]">
           <CardContent className="flex h-full items-center justify-between gap-4">
             <div>
               <div className="text-xs text-muted-foreground">日均用电</div>
@@ -206,7 +187,7 @@ export function DashboardView({
           </CardContent>
         </Card>
 
-        <Card className="min-h-[148px]">
+        <Card className="power-summary-card min-h-[148px]">
           <CardContent className="flex h-full items-center justify-between">
             <div>
               <div className="text-xs text-muted-foreground">绑定宿舍</div>
@@ -219,24 +200,20 @@ export function DashboardView({
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1fr_360px]">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+        <Card className="dashboard-chart-card">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle>
                 {primary.room.building_name} {primary.room.room_number}
               </CardTitle>
               <p className="mt-1 text-xs text-muted-foreground">每一次查询都会成为一个点，曲线按查询时间连接。</p>
             </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={checkDisabled}
+            <CooldownRefreshButton
+              availableAt={primary.manual_check_available_at}
+              checking={checking}
+              className="w-full sm:w-auto"
               onClick={() => onCheckRoom(primary.binding_id)}
-              title={cooldownSeconds > 0 ? "手动同步有 5 分钟冷却" : "立即同步一次当前电量"}
-            >
-              {checking ? <Loader2 className="animate-spin" size={15} /> : <RefreshCcw size={15} />}
-              {cooldownSeconds > 0 ? `${cooldownSeconds}s 后可刷新` : "立即刷新"}
-            </Button>
+            />
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 lg:grid-cols-[220px_1fr] lg:items-end">
@@ -292,12 +269,13 @@ export function DashboardView({
             ) : null}
 
             {chartLoading ? (
-              <div className="flex min-h-[280px] items-center justify-center text-sm text-muted-foreground">
-                <Loader2 className="mr-2 animate-spin" size={18} />
-                正在读取历史读数
+              <div aria-label="正在读取历史读数" className="min-h-[280px] space-y-4 py-3" role="status">
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="h-[238px] w-full rounded-xl" />
+                <span className="sr-only">正在读取历史读数</span>
               </div>
             ) : chartReadings.length > 0 ? (
-              <PowerChart readings={chartReadings} />
+              <PowerChart readings={chartReadings} averageDailyUsage={primary.usage.average_daily_usage} />
             ) : (
               <EmptyState
                 title="暂无历史记录"
@@ -314,7 +292,7 @@ export function DashboardView({
           </CardHeader>
           <CardContent className="space-y-3">
             {summaries.map((item) => (
-              <div key={item.binding_id} className="glass-tile rounded-lg border border-border/70 p-3">
+              <div key={item.binding_id} className="status-room-card glass-tile rounded-lg border border-border/70 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">

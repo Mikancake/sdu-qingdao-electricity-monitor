@@ -9,6 +9,7 @@ from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.electricity_reading import ElectricityReading
 from app.models.notification import Notification
 from app.models.room import Room
+from app.models.scheduled_job_run import ScheduledJobRun
 from app.models.smtp_health_log import SmtpHealthLog
 from app.models.smtp_settings import SmtpSettings
 from app.models.user import User
@@ -26,6 +27,7 @@ __all__ = [
     "ElectricityReading",
     "Notification",
     "Room",
+    "ScheduledJobRun",
     "SmtpHealthLog",
     "SmtpSettings",
     "User",

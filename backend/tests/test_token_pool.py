@@ -1,9 +1,10 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.models.auth_token import AuthToken
-from app.services.token_pool import select_available_token
+from app.services import token_pool
+from app.services.token_pool import reserve_available_token, select_available_token
 
 
 def test_token_selection_reserves_before_returning_and_rotates(monkeypatch) -> None:
@@ -30,3 +31,33 @@ def test_token_selection_reserves_before_returning_and_rotates(monkeypatch) -> N
         assert first.last_used_at is not None
         assert second.last_used_at is not None
         assert unavailable is None
+
+
+def test_reserve_available_token_commits_short_reservations(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "credential_encryption_key", "k" * 32)
+    monkeypatch.setattr(settings, "credential_encryption_old_keys", "")
+    engine = create_engine("sqlite://")
+    AuthToken.__table__.create(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(token_pool, "SessionLocal", factory)
+
+    with factory() as db:
+        db.add_all(
+            [
+                AuthToken(name="first", token_value="first-token", min_interval_seconds=60, enabled=True),
+                AuthToken(name="second", token_value="second-token", min_interval_seconds=60, enabled=True),
+            ]
+        )
+        db.commit()
+
+    first = reserve_available_token()
+    second = reserve_available_token()
+    unavailable = reserve_available_token()
+
+    assert first is not None and first.token_value == "first-token"
+    assert second is not None and second.token_value == "second-token"
+    assert unavailable is None
+
+    with factory() as db:
+        tokens = list(db.query(AuthToken).order_by(AuthToken.id))
+        assert all(token.last_used_at is not None for token in tokens)

@@ -11,6 +11,7 @@ from app.models.electricity_reading import ElectricityReading
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.notification import Notification
+from app.models.scheduled_job_run import ScheduledJobRun
 from app.services.runtime_settings import RuntimeConfig, get_runtime_config
 
 
@@ -22,6 +23,7 @@ class DataRetentionCleanupResult:
     email_delivery_logs_deleted: int = 0
     electricity_readings_deleted: int = 0
     admin_audit_logs_deleted: int = 0
+    scheduled_job_runs_deleted: int = 0
 
     @property
     def total_deleted(self) -> int:
@@ -32,6 +34,7 @@ class DataRetentionCleanupResult:
             + self.email_delivery_logs_deleted
             + self.electricity_readings_deleted
             + self.admin_audit_logs_deleted
+            + self.scheduled_job_runs_deleted
         )
 
 
@@ -54,6 +57,7 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
     email_delivery_logs_deleted = 0
     electricity_readings_deleted = 0
     admin_audit_logs_deleted = 0
+    scheduled_job_runs_deleted = 0
 
     verification_cutoff = _cutoff(runtime.verification_code_retention_days)
     if verification_cutoff is not None:
@@ -85,6 +89,16 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
         result = db.execute(delete(AdminAuditLog).where(AdminAuditLog.created_at < audit_cutoff))
         admin_audit_logs_deleted = _rowcount(result.rowcount)
 
+    scheduled_job_cutoff = _cutoff(runtime.scheduled_job_run_retention_days)
+    if scheduled_job_cutoff is not None:
+        result = db.execute(
+            delete(ScheduledJobRun).where(
+                ScheduledJobRun.created_at < scheduled_job_cutoff,
+                ScheduledJobRun.status.in_(("succeeded", "failed")),
+            )
+        )
+        scheduled_job_runs_deleted = _rowcount(result.rowcount)
+
     db.commit()
     return DataRetentionCleanupResult(
         verification_codes_deleted=verification_codes_deleted,
@@ -93,6 +107,7 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
         email_delivery_logs_deleted=email_delivery_logs_deleted,
         electricity_readings_deleted=electricity_readings_deleted,
         admin_audit_logs_deleted=admin_audit_logs_deleted,
+        scheduled_job_runs_deleted=scheduled_job_runs_deleted,
     )
 
 

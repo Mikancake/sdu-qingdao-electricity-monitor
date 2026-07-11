@@ -20,9 +20,56 @@ const appearancePositions: Array<{ key: AppearanceSettings["background_position"
 ];
 
 const glassEffectModes: Array<{ key: AppearanceSettings["glass_effect_mode"]; label: string; description: string }> = [
-  { key: "lite", label: "轻量玻璃", description: "清晰、低开销，适合纯色或细节较少的背景。" },
-  { key: "liquid", label: "Liquid Glass", description: "导航与控件呈现环境材质，内容区域保持清晰。" },
-  { key: "frosted", label: "小米式毛玻璃", description: "复用上传时生成的预模糊纹理，滚动时无需实时计算。" }
+  { key: "lite", label: "轻量玻璃", description: "清晰克制，适合纯色或细节较少的背景。" },
+  { key: "liquid", label: "液态玻璃", description: "通透、柔和反射，突出导航与交互控件。" },
+  { key: "frosted", label: "细腻毛玻璃", description: "均匀磨砂和柔化纹理，适合照片背景。" }
+];
+
+type AppearanceTuning = Pick<
+  AppearanceSettings,
+  "background_overlay_opacity" | "background_blur_px" | "glass_card_opacity" | "glass_blur_px"
+>;
+
+const glassModeDefaults: Record<AppearanceSettings["glass_effect_mode"], AppearanceTuning> = {
+  lite: {
+    background_overlay_opacity: 0.5,
+    background_blur_px: 0,
+    glass_card_opacity: 0.78,
+    glass_blur_px: 3
+  },
+  liquid: {
+    background_overlay_opacity: 0.34,
+    background_blur_px: 3,
+    glass_card_opacity: 0.46,
+    glass_blur_px: 12
+  },
+  frosted: {
+    background_overlay_opacity: 0.4,
+    background_blur_px: 10,
+    glass_card_opacity: 0.58,
+    glass_blur_px: 14
+  }
+};
+
+const glassPresets: Array<{ key: string; label: string; description: string; values: AppearanceTuning }> = [
+  {
+    key: "clear",
+    label: "清晰",
+    description: "高可读性",
+    values: { background_overlay_opacity: 0.56, background_blur_px: 0, glass_card_opacity: 0.8, glass_blur_px: 4 }
+  },
+  {
+    key: "balanced",
+    label: "均衡",
+    description: "日常推荐",
+    values: { background_overlay_opacity: 0.42, background_blur_px: 6, glass_card_opacity: 0.62, glass_blur_px: 10 }
+  },
+  {
+    key: "transparent",
+    label: "通透",
+    description: "突出背景",
+    values: { background_overlay_opacity: 0.28, background_blur_px: 12, glass_card_opacity: 0.42, glass_blur_px: 15 }
+  }
 ];
 
 type AppearanceNumberSettingKey =
@@ -84,6 +131,16 @@ export function AppearanceSettingsPanel({
     saveAppearanceSettings(DEFAULT_APPEARANCE_SETTINGS);
     setDirty(false);
     onSave(DEFAULT_APPEARANCE_SETTINGS);
+  }
+
+  function selectGlassMode(mode: AppearanceSettings["glass_effect_mode"]) {
+    setDirty(true);
+    setAppearanceForm((current) => ({ ...current, glass_effect_mode: mode, ...glassModeDefaults[mode] }));
+  }
+
+  function applyGlassPreset(values: AppearanceTuning) {
+    setDirty(true);
+    setAppearanceForm((current) => ({ ...current, ...values }));
   }
 
   async function uploadBackground(theme: "light" | "dark", file?: File) {
@@ -210,28 +267,53 @@ export function AppearanceSettingsPanel({
 
             <div>
               <Label>玻璃渲染模式</Label>
+              <p className="mb-2 text-xs leading-5 text-muted-foreground">选择模式会载入推荐参数，随后仍可用下方滑块微调。</p>
               <div className="grid gap-2 md:grid-cols-3">
                 {glassEffectModes.map((item) => (
                   <button
                     key={item.key}
-                    className={`rounded-lg border px-3 py-3 text-left transition ${
-                      appearanceForm.glass_effect_mode === item.key
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-muted/40 text-muted-foreground hover:bg-muted/70"
-                    }`}
-                    onClick={() => setAppearanceValue("glass_effect_mode", item.key)}
+                    aria-pressed={appearanceForm.glass_effect_mode === item.key}
+                    className="appearance-material-option"
+                    data-active={appearanceForm.glass_effect_mode === item.key ? "true" : "false"}
+                    onClick={() => selectGlassMode(item.key)}
                     type="button"
                   >
-                    <div className="text-sm font-medium">{item.label}</div>
-                    <div className="mt-1 text-xs leading-5">{item.description}</div>
+                    <span className={`appearance-material-swatch appearance-material-swatch-${item.key}`} aria-hidden="true" />
+                    <span className="min-w-0">
+                      <span className="flex items-center justify-between gap-2 text-sm font-semibold">
+                        {item.label}
+                        {appearanceForm.glass_effect_mode === item.key ? <span className="appearance-selected-dot" /> : null}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">{item.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label>材质预设</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {glassPresets.map((preset) => (
+                  <button
+                    key={preset.key}
+                    className="appearance-preset"
+                    onClick={() => applyGlassPreset(preset.values)}
+                    type="button"
+                  >
+                    <span className="text-sm font-semibold text-foreground">{preset.label}</span>
+                    <span className="text-[11px] text-muted-foreground">{preset.description}</span>
                   </button>
                 ))}
               </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <Label htmlFor="appearance-overlay">背景遮罩 {Math.round(appearanceForm.background_overlay_opacity * 100)}%</Label>
+              <div className="appearance-control-card">
+                <Label className="flex items-center justify-between gap-3" htmlFor="appearance-overlay">
+                  <span>页面遮罩</span>
+                  <span className="appearance-value">{Math.round(appearanceForm.background_overlay_opacity * 100)}%</span>
+                </Label>
                 <input
                   id="appearance-overlay"
                   className="glass-range"
@@ -242,9 +324,13 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.background_overlay_opacity}
                   onChange={(event) => setAppearanceNumber("background_overlay_opacity", event.target.value)}
                 />
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">数值越高，文字与背景的对比越清晰。</p>
               </div>
-              <div>
-                <Label htmlFor="appearance-bg-blur">背景模糊 {appearanceForm.background_blur_px}px（上传图使用预处理）</Label>
+              <div className="appearance-control-card">
+                <Label className="flex items-center justify-between gap-3" htmlFor="appearance-bg-blur">
+                  <span>背景柔化</span>
+                  <span className="appearance-value">{appearanceForm.background_blur_px}px</span>
+                </Label>
                 <input
                   id="appearance-bg-blur"
                   className="glass-range"
@@ -255,9 +341,13 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.background_blur_px}
                   onChange={(event) => setAppearanceNumber("background_blur_px", event.target.value)}
                 />
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">上传图片会使用优化后的纹理，避免滚动时重复计算。</p>
               </div>
-              <div>
-                <Label htmlFor="appearance-card-opacity">卡片透明度 {Math.round(appearanceForm.glass_card_opacity * 100)}%</Label>
+              <div className="appearance-control-card">
+                <Label className="flex items-center justify-between gap-3" htmlFor="appearance-card-opacity">
+                  <span>卡片不透明度</span>
+                  <span className="appearance-value">{Math.round(appearanceForm.glass_card_opacity * 100)}%</span>
+                </Label>
                 <input
                   id="appearance-card-opacity"
                   className="glass-range"
@@ -268,9 +358,13 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.glass_card_opacity}
                   onChange={(event) => setAppearanceNumber("glass_card_opacity", event.target.value)}
                 />
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">数值越低越通透；照片较复杂时建议适当提高。</p>
               </div>
-              <div>
-                <Label htmlFor="appearance-card-blur">导航与控制层模糊 {appearanceForm.glass_blur_px}px</Label>
+              <div className="appearance-control-card">
+                <Label className="flex items-center justify-between gap-3" htmlFor="appearance-card-blur">
+                  <span>材质柔化强度</span>
+                  <span className="appearance-value">{appearanceForm.glass_blur_px}px</span>
+                </Label>
                 <input
                   id="appearance-card-blur"
                   className="glass-range"
@@ -281,6 +375,7 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.glass_blur_px}
                   onChange={(event) => setAppearanceNumber("glass_blur_px", event.target.value)}
                 />
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">同时影响玻璃纹理、边缘质感以及导航层模糊。</p>
               </div>
             </div>
 
