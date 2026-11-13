@@ -1,7 +1,8 @@
-import { AlertTriangle, BatteryCharging, Building2, Clock, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, BatteryCharging, BellRing, Building2, CheckCircle2, CircleDollarSign, Clock, Receipt, Sparkles, Zap } from "lucide-react";
 
-import type { Reading, UserRoomSummary } from "../lib/types";
+import type { Announcement, Reading, UserRoomSummary } from "../lib/types";
 import { formatDateTime, formatDays, formatKwh, formatKwhPerDay } from "../lib/utils";
+import { AnnouncementsNotice } from "./AnnouncementsNotice";
 import { EmptyState } from "./EmptyState";
 import { CooldownRefreshButton } from "./CooldownRefreshButton";
 import { PowerChart } from "./PowerChart";
@@ -20,6 +21,9 @@ export interface ChartRangeState {
 }
 
 interface DashboardViewProps {
+  announcements: Announcement[];
+  /** Dismissals are remembered per account so shared computers do not leak state. */
+  announcementsStorageKey?: string;
   summaries: UserRoomSummary[];
   selectedBindingId?: number | null;
   chartReadings: Reading[];
@@ -38,7 +42,21 @@ function selectPrimaryRoom(summaries: UserRoomSummary[]) {
 }
 
 function hasMeasuredAverage(item: UserRoomSummary) {
-  return item.usage.average_daily_usage_source === "measured" && Boolean(item.usage.average_daily_usage);
+  return ["measured", "measured_historical", "provider_reported", "provider_reported_historical"].includes(
+    item.usage.estimated_daily_usage_source ?? item.usage.average_daily_usage_source ?? ""
+  ) && Boolean(item.usage.estimated_daily_usage ?? item.usage.average_daily_usage);
+}
+
+function estimatedDailyUsage(item: UserRoomSummary) {
+  return item.usage.estimated_daily_usage ?? item.usage.average_daily_usage;
+}
+
+function usageSource(item: UserRoomSummary) {
+  return item.usage.estimated_daily_usage_source ?? item.usage.average_daily_usage_source ?? "unknown";
+}
+
+function latestDataAt(item: UserRoomSummary) {
+  return item.usage.latest_provider_updated_at ?? item.usage.latest_read_at;
 }
 
 function formatUsageWindow(hours?: string | null) {
@@ -67,18 +85,43 @@ function defaultDailyUsage(item: UserRoomSummary) {
 }
 
 function dailyUsageBasis(item: UserRoomSummary) {
-  if (hasMeasuredAverage(item)) {
-    return `实测日均 ${formatKwhPerDay(item.usage.average_daily_usage)}`;
+  const value = estimatedDailyUsage(item);
+  const formatted = formatKwhPerDay(value);
+  const source = usageSource(item);
+  if (source === "provider_reported_historical" || source === "measured_historical") {
+    return `历史活跃期参考 ${formatted}`;
   }
-  return `默认 ${formatKwhPerDay(defaultDailyUsage(item))}`;
+  if (source === "provider_reported") {
+    return `上游日均 ${formatted}`;
+  }
+  if (source === "measured") {
+    return `余额下降实测 ${formatted}`;
+  }
+  if (value) {
+    return `默认估算 ${formatted}`;
+  }
+  if (hasMeasuredAverage(item)) {
+    return `实测参考 ${formatted}`;
+  }
+  return `默认估算 ${formatKwhPerDay(defaultDailyUsage(item))}`;
 }
 
 function usageAverageHint(item: UserRoomSummary) {
-  if (hasMeasuredAverage(item)) {
-    return `基于最近${formatUsageWindow(item.usage.usage_window_hours)}的余额下降记录计算`;
+  const source = usageSource(item);
+  if (source === "provider_reported") {
+    return `基于最近${formatUsageWindow(item.usage.usage_window_hours)}的上游日用电数据`;
+  }
+  if (source === "provider_reported_historical") {
+    return `当前刚恢复用电，暂参考上一段活跃期的上游日用电数据`;
+  }
+  if (source === "measured") {
+    return `基于最近${formatUsageWindow(item.usage.usage_window_hours)}的余额下降记录`;
+  }
+  if (source === "measured_historical") {
+    return `当前刚恢复用电，暂参考上一段活跃期的余额下降记录`;
   }
   if (item.usage.latest_read_at) {
-    return "有效下降读数不足，暂不显示实测日均";
+    return `有效完整日样本不足，暂按${formatKwhPerDay(estimatedDailyUsage(item) ?? defaultDailyUsage(item))}估算`;
   }
   return "暂无历史读数";
 }
@@ -87,10 +130,10 @@ function remainingHint(item: UserRoomSummary) {
   if (!item.usage.latest_balance) {
     return "暂无当前电量";
   }
-  if (item.usage.days_remaining_source === "measured") {
+  if (["measured", "measured_historical", "provider_reported", "provider_reported_historical"].includes(item.usage.days_remaining_source ?? "")) {
     return "基于最近实测日均用电估算";
   }
-  return `基于${dailyUsageBasis(item)}估算，有效下降读数充足后改用实测`;
+  return `基于${dailyUsageBasis(item)}估算，获得足够完整日数据后会自动更新`;
 }
 
 function thresholdHint(item: UserRoomSummary) {
@@ -116,7 +159,127 @@ const chartRangeItems: Array<{ key: ChartRangeKey; label: string }> = [
   { key: "custom", label: "自定义" }
 ];
 
+function formatMoney(value?: string | null) {
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  return Number.isFinite(number) ? `¥${number.toFixed(2)}` : "--";
+}
+
+function formatPrice(value?: string | null) {
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  return Number.isFinite(number) ? `¥${number.toFixed(4)} / 度` : "--";
+}
+
+function HwglDetails({ item }: { item: UserRoomSummary }) {
+  const recharges = item.recent_recharges ?? [];
+  return (
+    <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CircleDollarSign className="text-primary" size={19} />
+            电量构成
+          </CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">拆分数据由当前电量查询结果提供，余额上涨不会被计入用电量。</p>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3">
+          {[
+            ["免费电量", formatKwh(item.usage.free_electricity)],
+            ["付费电量", formatKwh(item.usage.paid_electricity)],
+            ["欠费电量", formatKwh(item.usage.arrears_electricity)],
+            ["当前电价", formatPrice(item.usage.electricity_price)],
+            ["余额折算", formatMoney(item.usage.estimated_amount)]
+          ].map(([label, value]) => (
+            <div key={label} className="min-w-0 border-t border-border pt-3">
+              <div className="text-xs text-muted-foreground">{label}</div>
+              <div className="mt-2 break-words text-base font-semibold tabular-nums">{value}</div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Receipt className="text-success" size={19} />
+            最近充值
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recharges.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border px-4 py-7 text-center text-xs leading-5 text-muted-foreground">
+              暂无充值记录，后台同步后会显示在这里。
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {recharges.slice(0, 6).map((recharge) => (
+                <div key={recharge.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">{recharge.paid_at ? formatDateTime(recharge.paid_at) : "时间未知"}</div>
+                    <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                      {recharge.line_type || "电量充值"}{recharge.processing_status || recharge.payment_status ? ` · ${recharge.processing_status || recharge.payment_status}` : ""}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-sm font-semibold text-success tabular-nums">{formatMoney(recharge.amount)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+function OnboardingPanel({ onGoRooms }: { onGoRooms: () => void }) {
+  const steps = [
+    {
+      title: "选择宿舍楼",
+      description: "从楼栋列表中选择对应的宿舍楼。",
+      icon: Building2
+    },
+    {
+      title: "填写房间号",
+      description: "输入房间号，添加时会先查询确认。",
+      icon: CheckCircle2
+    },
+    {
+      title: "设置提醒",
+      description: "按剩余天数或固定电量接收提醒。",
+      icon: BellRing
+    }
+  ];
+
+  return (
+    <section className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
+      <div className="feature-panel flex flex-col items-start rounded-lg border border-border bg-panel p-6 sm:p-8">
+        <span className="eyebrow inline-flex items-center gap-2"><Sparkles size={16} /> 开始监测</span>
+        <h2 className="page-heading mt-8 max-w-sm text-3xl leading-tight sm:text-4xl">先添加宿舍，<br />再把电量交给我们。</h2>
+        <p className="mt-5 max-w-md text-sm leading-7 text-muted-foreground">绑定后即可查看余额、用电趋势与预计剩余天数。电量接近阈值时，邮件会提醒你及时充值。</p>
+        <Button className="mt-8" onClick={onGoRooms}>绑定我的宿舍 <ArrowRight size={16} /></Button>
+        <p className="mt-6 text-xs leading-6 text-muted-foreground">支持多宿舍切换，提醒方式可随时调整。</p>
+      </div>
+      <Card>
+        <CardHeader><CardTitle className="text-base">只需三步，开始监测</CardTitle></CardHeader>
+        <CardContent className="space-y-6">
+          {steps.map(({ title, description, icon: Icon }, index) => (
+            <div key={title} className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><Icon size={20} /></div>
+              <div>
+                <p className="text-[11px] font-semibold tabular-nums text-primary">0{index + 1}</p>
+                <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+                <p className="mt-1 text-xs leading-6 text-muted-foreground">{description}</p>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
 export function DashboardView({
+  announcements,
+  announcementsStorageKey,
   summaries,
   selectedBindingId,
   chartReadings,
@@ -133,116 +296,104 @@ export function DashboardView({
   const lowCount = summaries.filter((item) => item.usage.is_low_power).length;
   const enabledCount = summaries.filter((item) => item.enabled).length;
 
+  const overviewHeader = (
+    <section className="dashboard-overview flex flex-col gap-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.12] via-panel/45 to-panel/20 p-5 sm:flex-row sm:items-end sm:justify-between sm:p-6">
+      <div>
+        <p className="eyebrow">用电总览</p>
+        <h1 className="page-heading mt-2 text-3xl sm:text-4xl">宿舍用电，一目了然。</h1>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          {summaries.length > 0 ? `已绑定 ${summaries.length} 个宿舍 · ${enabledCount} 个正在监测` : "添加宿舍，记录电量变化，及时接收低电量提醒。"}
+        </p>
+      </div>
+      <Badge className="self-start sm:self-auto" tone={lowCount > 0 ? "danger" : summaries.length > 0 ? "success" : "muted"}>
+        {lowCount > 0 ? `${lowCount} 个宿舍需要关注` : summaries.length > 0 ? "当前运行正常" : "等待绑定宿舍"}
+      </Badge>
+    </section>
+  );
+
   if (loading) {
     return <DashboardSkeleton />;
   }
 
   if (!primary) {
     return (
-      <EmptyState
-        title="还没有绑定宿舍"
-        description="绑定宿舍后，这里会显示当前电量、预计剩余天数和最近电量曲线。"
-        icon={<Building2 size={28} />}
-        action={<Button onClick={onGoRooms}>去绑定宿舍</Button>}
-      />
+      <div className="space-y-5">
+        {overviewHeader}
+        <AnnouncementsNotice announcements={announcements} defaultExpanded={false} storageKey={announcementsStorageKey} />
+        <OnboardingPanel onGoRooms={onGoRooms} />
+      </div>
     );
   }
 
   const checking = checkingId === primary.binding_id;
-
   return (
-    <div className="space-y-5">
-      <section className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="power-summary-card power-summary-card-primary min-h-[148px]">
-          <CardContent className="flex h-full items-center justify-between">
-            <div>
-              <div className="text-xs text-muted-foreground">当前电量</div>
-              <div className="mt-2 text-2xl font-semibold">{formatKwh(primary.usage.latest_balance)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(primary.usage.latest_read_at)}</div>
-            </div>
-            <BatteryCharging className="text-primary" size={28} />
-          </CardContent>
-        </Card>
+    <div className="space-y-6">
+      {overviewHeader}
 
-        <Card className="power-summary-card min-h-[148px]">
-          <CardContent className="flex h-full items-center justify-between gap-4">
-            <div>
-              <div className="text-xs text-muted-foreground">预计剩余</div>
-              <div className="mt-2 text-2xl font-semibold">{formatDays(primary.usage.days_remaining)}</div>
-              <div className="mt-1 max-w-[210px] text-xs leading-5 text-muted-foreground">{remainingHint(primary)}</div>
-            </div>
-            <Clock className="shrink-0 text-success" size={28} />
-          </CardContent>
-        </Card>
-
-        <Card className="power-summary-card min-h-[148px]">
-          <CardContent className="flex h-full items-center justify-between gap-4">
-            <div>
-              <div className="text-xs text-muted-foreground">日均用电</div>
-              <div className="mt-2 text-2xl font-semibold">{formatKwhPerDay(primary.usage.average_daily_usage)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{usageAverageHint(primary)}</div>
-              <div className="mt-1 max-w-[240px] text-xs leading-5 text-muted-foreground">{thresholdHint(primary)}</div>
-            </div>
-            <Zap className="shrink-0 text-warning" size={28} />
-          </CardContent>
-        </Card>
-
-        <Card className="power-summary-card min-h-[148px]">
-          <CardContent className="flex h-full items-center justify-between">
-            <div>
-              <div className="text-xs text-muted-foreground">绑定宿舍</div>
-              <div className="mt-2 text-2xl font-semibold">{enabledCount}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{lowCount > 0 ? `${lowCount} 个低电量` : "运行正常"}</div>
-            </div>
-            <AlertTriangle className={lowCount > 0 ? "text-danger" : "text-muted-foreground"} size={28} />
-          </CardContent>
-        </Card>
+      <section aria-label="当前宿舍电量" className="dashboard-summary-surface min-w-0 overflow-hidden rounded-2xl border">
+        <div className="dashboard-summary-toolbar flex flex-col gap-4 border-b border-border/60 p-4 sm:p-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0 xl:w-80">
+            <Label htmlFor="chart-room">当前宿舍</Label>
+            <Select id="chart-room" value={primary.binding_id} onChange={(event) => onSelectBinding(Number(event.target.value))}>
+              {summaries.map((item) => (
+                <option key={item.binding_id} value={item.binding_id}>{item.room.building_name} {item.room.room_number}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="muted">{primary.room.provider === "hwgl" ? "HWGL 官方数据" : primary.room.provider === "mcard" ? "校园卡数据" : "已接入数据源"}</Badge>
+            <CooldownRefreshButton availableAt={primary.manual_check_available_at} checking={checking} onClick={() => onCheckRoom(primary.binding_id)} />
+            <Button variant="ghost" size="sm" onClick={onGoRooms}>管理宿舍 <ArrowRight size={14} /></Button>
+          </div>
+        </div>
+        <div className="dashboard-metric-grid grid divide-y divide-border/60 md:grid-cols-[1.25fr_1fr_1fr] md:divide-x md:divide-y-0">
+          <div className="dashboard-metric-card dashboard-metric-card-primary min-w-0 p-4 sm:p-5">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground"><BatteryCharging size={16} className="text-primary" /> 当前可用电量</div>
+            <div className="metric-value mt-3 break-words">{formatKwh(primary.usage.latest_balance)}</div>
+            <p className="mt-3 text-[11px] leading-5 text-muted-foreground">数据更新于 {formatDateTime(latestDataAt(primary))}</p>
+          </div>
+          <div className="dashboard-metric-card min-w-0 p-4 sm:p-5">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground"><Clock size={15} /> 预计还可使用</div>
+            <div className="metric-value mt-3 break-words">{formatDays(primary.usage.days_remaining)}</div>
+            <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{remainingHint(primary)}</p>
+          </div>
+          <div className="dashboard-metric-card min-w-0 p-4 sm:p-5">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground"><Zap size={15} /> 日均用电</div>
+            <div className="metric-value mt-3 break-words">{formatKwhPerDay(estimatedDailyUsage(primary))}</div>
+            <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{usageAverageHint(primary)}</p>
+          </div>
+        </div>
+        <div className="dashboard-summary-alert flex items-start gap-3 border-t border-border/60 p-4 sm:px-5">
+          <AlertTriangle size={16} className={`mt-0.5 shrink-0 ${primary.usage.is_low_power ? "text-danger" : "text-primary"}`} />
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium">{primary.usage.is_low_power ? "当前宿舍电量偏低" : primary.enabled ? "当前宿舍监测中" : "当前宿舍已停用"}</p>
+            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{thresholdHint(primary)}</p>
+          </div>
+        </div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[1fr_360px]">
-        <Card className="dashboard-chart-card">
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <Card className="min-w-0">
+          <CardHeader className="flex flex-col gap-3 border-b border-border sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>
-                {primary.room.building_name} {primary.room.room_number}
-              </CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">每一次查询都会成为一个点，曲线按查询时间连接。</p>
+              <CardTitle className="text-lg">电量走势</CardTitle>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">余额变化与充值记录；优先使用上游官方数据。</p>
             </div>
-            <CooldownRefreshButton
-              availableAt={primary.manual_check_available_at}
-              checking={checking}
-              className="w-full sm:w-auto"
-              onClick={() => onCheckRoom(primary.binding_id)}
-            />
+            <span className="shrink-0 text-xs text-muted-foreground">{primary.room.building_name} · {primary.room.room_number}</span>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 lg:grid-cols-[220px_1fr] lg:items-end">
-              <div>
-                <Label htmlFor="chart-room">图表宿舍</Label>
-                <Select
-                  id="chart-room"
-                  value={primary.binding_id}
-                  onChange={(event) => onSelectBinding(Number(event.target.value))}
+          <CardContent className="space-y-5">
+            <div className="flex flex-wrap gap-1 rounded-md bg-muted p-1">
+              {chartRangeItems.map((item) => (
+                <Button
+                  key={item.key}
+                  size="sm"
+                  variant={chartRange.key === item.key ? "primary" : "ghost"}
+                  aria-pressed={chartRange.key === item.key}
+                  onClick={() => onChangeChartRange({ ...chartRange, key: item.key })}
                 >
-                  {summaries.map((item) => (
-                    <option key={item.binding_id} value={item.binding_id}>
-                      {item.room.building_name} {item.room.room_number}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {chartRangeItems.map((item) => (
-                  <Button
-                    key={item.key}
-                    size="sm"
-                    variant={chartRange.key === item.key ? "primary" : "secondary"}
-                    onClick={() => onChangeChartRange({ ...chartRange, key: item.key })}
-                  >
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
+                  {item.label}
+                </Button>
+              ))}
             </div>
 
             {chartRange.key === "custom" ? (
@@ -271,11 +422,15 @@ export function DashboardView({
             {chartLoading ? (
               <div aria-label="正在读取历史读数" className="min-h-[280px] space-y-4 py-3" role="status">
                 <Skeleton className="h-3 w-28" />
-                <Skeleton className="h-[238px] w-full rounded-xl" />
+                <Skeleton className="h-[238px] w-full rounded-none" />
                 <span className="sr-only">正在读取历史读数</span>
               </div>
             ) : chartReadings.length > 0 ? (
-              <PowerChart readings={chartReadings} averageDailyUsage={primary.usage.average_daily_usage} />
+              <PowerChart
+                readings={chartReadings}
+                averageDailyUsage={estimatedDailyUsage(primary)}
+                recharges={primary.recent_recharges}
+              />
             ) : (
               <EmptyState
                 title="暂无历史记录"
@@ -286,42 +441,58 @@ export function DashboardView({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>宿舍状态</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {summaries.map((item) => (
-              <div key={item.binding_id} className="status-room-card glass-tile rounded-lg border border-border/70 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
-                      {item.room.building_name} {item.room.room_number}
+        <div className="flex min-w-0 flex-col gap-5">
+          <Card>
+            <CardHeader className="flex items-center justify-between gap-3 border-b border-border">
+              <CardTitle className="text-base">我的宿舍</CardTitle>
+              <span className="text-xs text-muted-foreground">{summaries.length} 个绑定</span>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {summaries.map((item) => (
+                <button
+                  key={item.binding_id}
+                  aria-pressed={item.binding_id === primary.binding_id}
+                  className={`w-full rounded-md border-l-2 p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${item.binding_id === primary.binding_id ? "border-primary bg-muted" : "border-transparent bg-panel hover:bg-muted"}`}
+                  onClick={() => onSelectBinding(item.binding_id)}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">
+                        {item.room.building_name} {item.room.room_number}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(latestDataAt(item))}</div>
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.usage.latest_read_at)}</div>
+                    <Badge tone={item.usage.is_low_power ? "danger" : item.enabled ? "success" : "muted"}>
+                      {item.usage.is_low_power ? "低电量" : item.enabled ? "启用" : "停用"}
+                    </Badge>
                   </div>
-                  <Badge tone={item.usage.is_low_power ? "danger" : item.enabled ? "success" : "muted"}>
-                    {item.usage.is_low_power ? "低电量" : item.enabled ? "启用" : "停用"}
-                  </Badge>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md bg-muted/55 px-2 py-2">
-                    <div className="text-muted-foreground">余额</div>
-                    <div className="mt-1 font-medium">{formatKwh(item.usage.latest_balance)}</div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="border-r border-border pr-2">
+                      <div className="text-muted-foreground">余额</div>
+                      <div className="mt-1 font-medium">{formatKwh(item.usage.latest_balance)}</div>
+                    </div>
+                    <div className="pl-2">
+                      <div className="text-muted-foreground">剩余</div>
+                      <div className="mt-1 font-medium">{formatDays(item.usage.days_remaining)}</div>
+                      {item.usage.days_remaining_source === "default" ? (
+                        <div className="mt-1 text-[11px] text-muted-foreground">默认估算</div>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="rounded-md bg-muted/55 px-2 py-2">
-                    <div className="text-muted-foreground">剩余</div>
-                    <div className="mt-1 font-medium">{formatDays(item.usage.days_remaining)}</div>
-                    {item.usage.days_remaining_source === "default" ? (
-                      <div className="mt-1 text-[11px] text-muted-foreground">默认估算</div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+          <AnnouncementsNotice
+            announcements={announcements}
+            className="min-h-0 flex-1"
+            defaultExpanded={false}
+            storageKey={announcementsStorageKey}
+          />
+        </div>
       </section>
+      {primary.room.provider === "hwgl" ? <HwglDetails item={primary} /> : null}
     </div>
   );
 }

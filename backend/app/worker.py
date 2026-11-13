@@ -8,6 +8,8 @@ from app.db.session import SessionLocal
 from app.services.data_retention import run_data_retention_cleanup
 from app.services.notifications import run_daily_reports, run_low_power_notifications
 from app.services.room_checks import run_room_checks
+from app.services.hwgl_sync import run_hwgl_metadata_sync
+from app.services.hwgl_probe import run_hwgl_probe_jobs
 from app.services.runtime_settings import get_runtime_config
 from app.services.scheduled_jobs import (
     ScheduledJobOutcome,
@@ -141,6 +143,16 @@ def main() -> int:
                 completed_slots,
                 next_probe_at,
             )
+            metadata_slot = latest_aligned_slot(now, runtime.hwgl_metadata_sync_interval_seconds)
+            _run_slot(
+                "hwgl_metadata_sync",
+                metadata_slot,
+                run_hwgl_metadata_sync,
+                completed_slots,
+                next_probe_at,
+                retry_seconds=900,
+                stale_seconds=7200,
+            )
             _run_slot(
                 "data_retention",
                 current_daily_slot(now, hour=runtime.retention_cleanup_hour),
@@ -148,6 +160,9 @@ def main() -> int:
                 completed_slots,
                 next_probe_at,
             )
+            processed_probes = run_hwgl_probe_jobs()
+            if processed_probes:
+                logger.info("HWGL probes: processed=%s", processed_probes)
         except Exception:
             logger.exception("worker loop failed; retrying without stopping the process")
 

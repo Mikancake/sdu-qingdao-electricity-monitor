@@ -20,6 +20,8 @@ Electricity Monitor 是一个把宿舍电量查询脚本扩展成 Web 平台的�
 
 它适合长期跑在自己的服务器上，服务多个用户和多个宿舍。它不是学校官方服务，也不应被包装成官方平台；请合理设置同步周期和请求频率。
 
+前端采用暖白纸面、墨色文字与赭橙强调的工作台设计，深色主题使用炭灰底色。学生端按总览、宿舍、记录、设置组织，管理端保留全部管理模块，手机提供底部导航。背景图片使用独立层，卡片始终保留可读底色；玻璃材质参数调节融合程度与柔化效果，不改变服务端保存值。提示框挂载到 document.body，遮罩覆盖整个视口，不受内容容器定位影响。界面调整不改变 API、账号或电量数据结构。
+
 <table>
   <tr>
     <td><strong>👩‍🎓 学生端</strong><br/>绑定宿舍、查看曲线、设置提醒邮箱、发送测试邮件</td>
@@ -37,10 +39,11 @@ Electricity Monitor 是一个把宿舍电量查询脚本扩展成 Web 平台的�
 | 🔐 邮箱账号 | 邮箱注册、验证码验证、密码登录 |
 | 🏠 宿舍绑定 | 一个用户可绑定多个宿舍，一个宿舍也可被多个用户绑定 |
 | ✅ 绑定校验 | 添加或修改宿舍时会立即查询一次电量，确认宿舍可查询 |
-| 📈 电量曲线 | 每次查询保存为历史点，前端按时间连接绘制趋势 |
+| 📈 电量曲线 | 每次成功查询保存读数；优先按学校系统的真实更新时间连接绘制趋势 |
 | ⚠️ 低电量提醒 | 支持固定阈值、按可用天数、按 1 天用电量提醒 |
 | 📮 邮件服务 | 注册验证码、测试邮件、低电量提醒、用电日报 |
-| 🔑 Token 池 | 多个查询 token 按可用时间轮换，避免单个账号承担所有请求 |
+| 🔌 多查询源 | 旧一卡通接口与新 HWGL 接口按楼宇自动路由，互不影响 |
+| 🔑 Token 池 | 旧一卡通查询使用多个 token 轮换；HWGL 查询不消耗 token |
 | 🧑‍💼 管理后台 | 管理用户、宿舍、Token、SMTP、全局参数、审计日志，并通过可选 Dashboard 图表查看查询、发信、用户与宿舍楼统计 |
 | 🎨 外观设置 | 支持亮色/暗色背景、玻璃效果和全局主题配置 |
 | 🧹 数据保留 | 支持清理验证码、查询记录、通知、审计日志等过期数据 |
@@ -65,13 +68,38 @@ GitHub 的 Mermaid 渲染对部分语法和中文标签不够稳定，这里使�
 ### 🔄 一次检查如何发生
 
 ```text
-① Worker 从数据库读取待检查宿舍和可用 token
-② Worker 请求电量查询接口，获取当前剩余电量
-③ Worker 保存电量读数和查询记录
-④ Worker 根据固定阈值、可用天数或默认日均用电计算提醒阈值
+① Worker 从数据库读取待检查宿舍，并根据楼宇选择查询 Provider
+② 旧一卡通 Provider 预留可用 token；HWGL Provider 直接查询，不使用 token
+③ Worker 保存余额、学校系统更新时间、官方日用电量和查询记录
+④ Worker 优先使用官方日用电量计算日均值，不足时再使用余额下降量或默认值
 ⑤ 低于阈值时，Worker 通过 SMTP 发送提醒邮件
 ⑥ 用户在网页端查看最新电量、历史曲线和查询记录
 ```
+
+### 🔌 电量查询 Provider
+
+| Provider | 适用楼宇 | 是否使用 Token 池 | 保存的数据 |
+|----------|----------|--------------------|------------|
+| `mcard` | 原一卡通系统仍可查询的楼宇 | 是 | 当前余额、查询时间 |
+| `hwgl` | 凤凰居 11/13 号楼 | 否 | 当前余额、上游更新时间、日用电量、免费/付费/欠费电量、当前电价、充值记录 |
+
+后端会在用户绑定宿舍时从 HWGL 宿舍目录解析真正的电表标识和线路号，并把结果缓存到宿舍记录中。后续定时检查直接使用已解析标识；当上游标识失效时会刷新目录并重新解析。凤凰居 11/13 号楼在平台中始终作为一个楼宇显示；上游的 11 公寓和 13 公寓仅作为内部电表解析标识，不会拆成两个用户可选项。
+
+升级脚本可以从 HWGL 按自然日回填真实历史记录。某个宿舍至少成功取得一条 HWGL 记录后，才会删除该宿舍已知不准确的旧 `mcard` 曲线；失败时保留旧记录用于恢复，但学生端、日报和提醒只读取宿舍当前 Provider 的数据，不会继续使用冻结的余额。
+
+HWGL 同一天的日用电数据可能在多次查询中重复出现。数据库保留每次成功查询，日均算法会按 `reported_usage_date` 去重；图表也会合并上游更新时间完全相同的重叠点，避免把重复拉取误画成新的数据更新。
+
+HWGL 的充值记录与日用电明细会由独立的元数据同步任务更新。充值订单不会以明文订单号保存，只保留用于去重的哈希和很短的末尾标识。管理员还可以在“实时性”页面启动隔离探测，观察余额快照是否变化、接口延迟和上游更新时间间隔；探测样本不会进入学生端曲线、日均用电计算或邮件通知。
+
+### 管理员实时性探测的目标与参数
+
+“实时性”页面的宿舍下拉框读取的是数据库 `rooms` 表中已经保存的 HWGL 宿舍，所以早期手动测试时留下的房间号也可能出现在列表中。它不是前端随机生成的；例如 `2222222` 如果仍然显示，说明数据库里存在对应的历史房间记录。管理员可以先用列表旁的筛选框定位它。
+
+现在也可以选择“手动输入并验证”：输入宿舍号后，后端会先查询 HWGL 的公开宿舍目录，确认房间存在并解析电表标识，验证通过后才创建探测任务。自定义目标会以 `probe_only` 标记保存，仅供管理员探测使用，不会出现在普通用户宿舍列表，也不会被正常同步、日均计算或邮件通知处理；如果以后有用户绑定同一位置，绑定流程会将它转为普通宿舍记录。
+
+- 请求间隔：支持预设值，也可以自定义 `60–3600` 秒。
+- 持续时间：支持预设值，也可以自定义分钟数，但不能超过“设置”页面中的 HWGL 探测最长持续时间。
+- “自动匹配”无法区分同号房间时，可选择 `11 侧` 或 `13 侧`；平台对外仍统一显示为“凤凰居11/13号楼”。
 
 ---
 
@@ -210,6 +238,16 @@ SECURITY_HEADERS_ENABLED=true
 DATABASE_URL="sqlite:///./dev.sqlite3"
 MAX_REQUEST_BODY_BYTES=1048576
 
+HWGL_API_BASE_URL="http://www.hwgl.qd.sdu.edu.cn/lwwaterpower"
+HWGL_API_TIMEOUT=10
+HWGL_DIRECTORY_CACHE_SECONDS=3600
+HWGL_CAMPUS_NAME="山东大学青岛校区"
+HWGL_PAY_TYPE="sl"
+HWGL_METADATA_SYNC_INTERVAL_SECONDS=86400
+HWGL_METADATA_HISTORY_DAYS=30
+HWGL_RECHARGE_HISTORY_DAYS=180
+HWGL_PROBE_MAX_DURATION_SECONDS=7200
+
 CHECK_INTERVAL_SECONDS=14400
 CHECK_BATCH_SIZE=50
 CHECK_REQUEST_DELAY_SECONDS=0.5
@@ -256,7 +294,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8000
 
 ## 🔑 Token 池
 
-电量查询接口需要 `Synjones-Auth` token。平台支持多个 token：
+旧一卡通电量接口需要 `Synjones-Auth` token。平台支持多个 token；凤凰居 11/13 号楼使用的 HWGL Provider 不会读取、预留或写入 Token 健康日志：
 
 1. 从管理后台新增、编辑、启用或停用 token。
 2. 查询时优先使用从未使用过的 token。
@@ -318,10 +356,11 @@ http://127.0.0.1:5173/admin
 |------|------|
 | 状态 | 查看用户数、宿舍数、token 数量、SMTP 状态和最近读数 |
 | 用户 | 查看、编辑、删除用户，为用户单独覆盖提醒参数 |
-| 宿舍 | 查看所有宿舍，以及绑定人数和绑定邮箱 |
+| 宿舍 | 查看所有宿舍、绑定人数、绑定邮箱、当前电量和 HWGL 电量构成；可打开单个宿舍的历史曲线与充值记录 |
+| 实时性 | 管理员专用的 HWGL 隔离探测，查看快照变化、接口延迟和上游更新时间间隔 |
+| 设置 | 修改检查周期、请求间隔、通知周期、用户绑定上限、数据保留、HWGL 元数据同步和实时性探测上限 |
 | Token | 新增、编辑、启用、删除查询 token |
 | SMTP | 配置发信邮箱，发送测试邮件 |
-| 设置 | 修改检查周期、请求间隔、通知周期、用户绑定上限、数据保留策略 |
 | 外观 | 设置亮色/暗色背景图、玻璃效果和页面材质 |
 | 账号 | 修改管理员资料和密码 |
 | 审计 | 查看最近管理操作 |
@@ -361,6 +400,8 @@ python -m app.scripts.init_db
 ```
 
 `init_db` 是统一的数据库初始化/升级入口：旧版数据库首次运行时会先补齐兼容结构并记录 Alembic 基线，之后会自动执行 `alembic upgrade head`。部署新版本前应先备份数据库，再运行一次该命令；不要直接手改生产表结构。
+
+读数表除了余额和平台查询时间，还会保存 `provider`、`provider_updated_at`、`reported_daily_usage`、`reported_usage_date` 与 `power_status`。因此曲线可以使用学校系统真正的数据更新时间，日报与低电量估算也可以优先使用官方日用电量；旧读数会保留为 `mcard`，算法不会把 Provider 切换时的余额跳变误算成用电。
 
 ---
 
@@ -612,6 +653,54 @@ sudo systemctl reload nginx
 ```
 
 Worker 的检查、通知、日报和数据清理均使用数据库持久化时间槽。进程重启后会补执行当前应完成但尚未成功的时间槽，并记录失败与重试状态；已成功时间槽不会重复执行。调度记录默认保留 90 天，可在管理后台的数据保留设置中修改。
+
+### 从旧版升级到 HWGL Provider
+
+这次更新包含正式数据库迁移。升级前先备份 PostgreSQL，并在迁移期间停止 API 与 Worker，避免旧进程继续写入旧结构：
+
+```bash
+cd /opt/sdu-qingdao-electricity-monitor
+
+sudo systemctl stop sdu-electricity-worker sdu-electricity-api
+sudo -u postgres pg_dump -Fc sdu_power \
+  > "$HOME/sdu_power-before-hwgl-$(date +%F-%H%M%S).dump"
+
+cd backend
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m app.scripts.init_db
+python -m app.scripts.refresh_hwgl_rooms --days 30
+deactivate
+
+cd ../frontend
+pnpm install --frozen-lockfile
+pnpm run build
+
+sudo systemctl start sdu-electricity-api sdu-electricity-worker
+sudo systemctl reload nginx
+curl --fail http://127.0.0.1:8000/health
+```
+
+如果服务器没有 `pnpm`，可以先安装，或者使用项目原先可正常构建前端的 Node 包管理器。现有 `.env` 不添加 `HWGL_*` 也能使用默认配置；服务器需要能够通过 HTTP 访问 `www.hwgl.qd.sdu.edu.cn:80`。Nginx 入站配置不需要因为这次 Provider 更新而修改。
+
+升级后可检查迁移与 Provider 分布：
+
+```bash
+cd /opt/sdu-qingdao-electricity-monitor/backend
+source .venv/bin/activate
+python -m alembic current
+deactivate
+
+sudo -u postgres psql -d sdu_power -c \
+  "SELECT provider, COUNT(*) FROM rooms GROUP BY provider ORDER BY provider;"
+
+sudo journalctl -u sdu-electricity-api -n 80 --no-pager
+sudo journalctl -u sdu-electricity-worker -n 80 --no-pager
+```
+
+数据库版本应为 `20260907_0007`。旧的凤凰居 11/13 绑定会原地切换为 `hwgl`，并统一显示为一个“凤凰居 11/13 号楼”；上游 11/13 公寓名称只保留在内部解析字段中。`refresh_hwgl_rooms` 默认回填最近 30 个自然日，并在每个宿舍成功回填后删除该宿舍原来冻结的 `mcard` 读数；重复执行会按上游更新时间、用电日期和余额去重，不会重复堆积相同历史点。需要暂时保留旧读数时可加 `--keep-legacy`。
+
+> 新接口提供更准确的上游更新时间，但平台不会自动提高请求频率。默认仍按全局 `CHECK_INTERVAL_SECONDS=14400`（4 小时）检查；管理员降低全局周期后可获得更多曲线点，同时也会提高其他楼宇旧接口的请求频率。
 
 ---
 

@@ -17,7 +17,7 @@ export function AuditPanel({
   onFiltersChange: (filters: LogFilters) => void;
 }) {
   return (
-    <Card>
+    <Card className="border-border bg-panel shadow-none">
       <CardHeader>
         <CardTitle>审计日志</CardTitle>
         <p className="mt-1 text-xs text-muted-foreground">记录管理员最近的配置修改操作。</p>

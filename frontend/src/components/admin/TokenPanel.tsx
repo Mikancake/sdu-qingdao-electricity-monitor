@@ -104,8 +104,8 @@ export function TokenPanel({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[380px_1fr]">
-      <Card>
+    <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>添加 Token</CardTitle>
         </CardHeader>
@@ -137,7 +137,7 @@ export function TokenPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>Token 池</CardTitle>
         </CardHeader>
@@ -277,7 +277,7 @@ export function TokenPanel({
         </CardContent>
       </Card>
 
-      <Card className="xl:col-span-2">
+      <Card className="xl:col-span-2 border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>Token 健康日志</CardTitle>
         </CardHeader>

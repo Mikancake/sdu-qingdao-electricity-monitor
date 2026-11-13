@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
-from app.api.routes import admin_appearance, admin_logs, admin_rooms, admin_status
+from app.api.routes import admin_announcements, admin_appearance, admin_hwgl, admin_logs, admin_rooms, admin_status
 from app.api.routes.admin_common import audit, next_smtp_id, smtp_out, token_out
 from app.api.routes.auth import ensure_email_shape, normalize_email
 from app.core.security import DUMMY_PASSWORD_HASH, hash_password, password_needs_rehash, sign_access_token, verify_password
@@ -56,10 +56,12 @@ from app.services.users import delete_user_account
 
 
 router = APIRouter()
+router.include_router(admin_announcements.router)
 router.include_router(admin_appearance.router)
 router.include_router(admin_logs.router)
 router.include_router(admin_rooms.router)
 router.include_router(admin_status.router)
+router.include_router(admin_hwgl.router)
 
 
 @router.post("/auth/login", response_model=AdminTokenOut)
@@ -346,8 +348,10 @@ def _first_test_room(db: Session, room_id: int | None = None) -> Room:
     room = db.get(Room, room_id) if room_id is not None else None
     if room is None and room_id is not None:
         raise HTTPException(status_code=404, detail="room not found")
+    if room is not None and room.provider != "mcard":
+        raise HTTPException(status_code=422, detail="token tests require a room that uses the mcard provider")
     if room is None:
-        room = db.scalar(select(Room).order_by(Room.id).limit(1))
+        room = db.scalar(select(Room).where(Room.provider == "mcard").order_by(Room.id).limit(1))
     if room is None:
         raise HTTPException(status_code=400, detail="no room can be used for token test")
     return room

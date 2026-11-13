@@ -1,11 +1,20 @@
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.auth_token import AuthToken
+
+
+# The API and the worker are separate processes writing the same SQLite file.
+# Reserving a token reads first and then updates, which SQLite can reject as an
+# immediate "database is locked" when another process commits in between.
+RESERVE_ATTEMPTS = 5
+RESERVE_RETRY_DELAY_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -52,10 +61,17 @@ def select_available_token(db: Session) -> AuthToken | None:
 
 def reserve_available_token() -> ReservedToken | None:
     """Atomically reserve a token in a short transaction before network I/O."""
-    with SessionLocal() as db:
-        token = select_available_token(db)
-        if token is None:
-            return None
-        reserved = ReservedToken(id=token.id, token_value=token.token_value)
-        db.commit()
-        return reserved
+    for attempt in range(RESERVE_ATTEMPTS):
+        try:
+            with SessionLocal() as db:
+                token = select_available_token(db)
+                if token is None:
+                    return None
+                reserved = ReservedToken(id=token.id, token_value=token.token_value)
+                db.commit()
+                return reserved
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == RESERVE_ATTEMPTS - 1:
+                raise
+            time.sleep(RESERVE_RETRY_DELAY_SECONDS * (attempt + 1))
+    return None

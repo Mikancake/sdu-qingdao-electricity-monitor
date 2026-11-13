@@ -3,17 +3,17 @@ import type { HTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("glass-card rounded-lg border border-border bg-panel shadow-soft", className)} {...props} />;
+  return <div className={cn("glass-card rounded-xl border border-border bg-panel shadow-[0_4px_20px_-16px_rgba(40,32,24,0.2)]", className)} {...props} />;
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("border-b border-border/70 px-4 py-3.5 sm:px-5 sm:py-4", className)} {...props} />;
+  return <div className={cn("border-b border-border/70 px-5 py-4 sm:px-6 sm:py-5", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className={cn("text-sm font-semibold text-foreground", className)} {...props} />;
+  return <h2 className={cn("text-base font-semibold tracking-tight text-foreground", className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("p-4 sm:p-5", className)} {...props} />;
+  return <div className={cn("p-5 sm:p-6", className)} {...props} />;
 }

@@ -46,6 +46,46 @@ class Settings(BaseSettings):
     electricity_api_level: str = Field(default="3", validation_alias="ELECTRICITY_API_LEVEL")
     electricity_api_feeitemid: str = Field(default="410", validation_alias="ELECTRICITY_API_FEEITEMID")
     electricity_api_timeout: int = Field(default=10, validation_alias="ELECTRICITY_API_TIMEOUT")
+    hwgl_api_base_url: str = Field(
+        default="http://www.hwgl.qd.sdu.edu.cn/lwwaterpower",
+        validation_alias="HWGL_API_BASE_URL",
+    )
+    hwgl_api_timeout: int = Field(default=10, ge=1, le=60, validation_alias="HWGL_API_TIMEOUT")
+    hwgl_directory_cache_seconds: int = Field(
+        default=60 * 60,
+        ge=0,
+        le=24 * 60 * 60,
+        validation_alias="HWGL_DIRECTORY_CACHE_SECONDS",
+    )
+    hwgl_campus_name: str = Field(
+        default="山东大学青岛校区",
+        validation_alias="HWGL_CAMPUS_NAME",
+    )
+    hwgl_pay_type: str = Field(default="sl", validation_alias="HWGL_PAY_TYPE")
+    hwgl_metadata_sync_interval_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=60,
+        le=7 * 24 * 60 * 60,
+        validation_alias="HWGL_METADATA_SYNC_INTERVAL_SECONDS",
+    )
+    hwgl_metadata_history_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        validation_alias="HWGL_METADATA_HISTORY_DAYS",
+    )
+    hwgl_recharge_history_days: int = Field(
+        default=180,
+        ge=1,
+        le=730,
+        validation_alias="HWGL_RECHARGE_HISTORY_DAYS",
+    )
+    hwgl_probe_max_duration_seconds: int = Field(
+        default=2 * 60 * 60,
+        ge=60,
+        le=24 * 60 * 60,
+        validation_alias="HWGL_PROBE_MAX_DURATION_SECONDS",
+    )
 
     background_tasks_enabled: bool = Field(default=False, validation_alias="BACKGROUND_TASKS_ENABLED")
     check_interval_seconds: int = Field(default=4 * 60 * 60, validation_alias="CHECK_INTERVAL_SECONDS")

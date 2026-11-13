@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, X } from "lucide-react";
 
 interface NoticeDialogProps {
@@ -62,30 +63,30 @@ export function NoticeDialog({ message, onClose, autoCloseMs = 5000 }: NoticeDia
 
   if (!message) return null;
 
-  return (
+  return createPortal(
     <div className="notice-backdrop fixed inset-0 z-[80] flex items-center justify-center px-4">
       <div
         ref={dialogRef}
         aria-describedby="notice-dialog-message"
         aria-labelledby="notice-dialog-title"
         aria-modal="true"
-        className="notice-dialog w-full max-w-[440px] rounded-xl border border-border bg-panel/98 p-5 text-foreground shadow-2xl"
+        className="notice-dialog w-full max-w-[440px] rounded-xl border border-border p-5 text-foreground shadow-2xl"
         role="alertdialog"
       >
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
             <AlertCircle size={22} />
           </div>
           <div className="min-w-0 flex-1">
-            <div id="notice-dialog-title" className="text-sm font-semibold">提示</div>
-            <div id="notice-dialog-message" className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
+            <div id="notice-dialog-title" className="text-base font-semibold">提示</div>
+            <div id="notice-dialog-message" className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">
               {message}
             </div>
           </div>
           <button
             ref={closeButtonRef}
             aria-label="关闭提示"
-            className="app-control -mr-1 -mt-1 flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="app-control -mr-1 -mt-1 flex h-10 w-10 items-center justify-center rounded-md text-foreground/70 hover:bg-muted hover:text-foreground"
             onClick={() => onCloseRef.current()}
             type="button"
           >
@@ -93,6 +94,7 @@ export function NoticeDialog({ message, onClose, autoCloseMs = 5000 }: NoticeDia
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

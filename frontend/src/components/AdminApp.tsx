@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
@@ -7,7 +6,9 @@ import {
   KeyRound,
   LogOut,
   Mail,
+  Megaphone,
   Moon,
+  Radio,
   ScrollText,
   Server,
   ShieldCheck,
@@ -28,6 +29,8 @@ import { SmtpPanel } from "./admin/SmtpPanel";
 import { StatusPanel } from "./admin/StatusPanel";
 import { TokenPanel } from "./admin/TokenPanel";
 import { UsersPanel } from "./admin/UsersPanel";
+import { AnnouncementsPanel } from "./admin/AnnouncementsPanel";
+import { HwglProbePanel } from "./admin/HwglProbePanel";
 import { MobileAdminNav } from "./admin/MobileAdminNav";
 import type { AdminNavItem } from "./admin/MobileAdminNav";
 import { ADMIN_THEME_KEY, ADMIN_TOKEN_KEY, DEFAULT_LOG_FILTERS, describeError } from "./admin/utils";
@@ -44,6 +47,7 @@ export function AdminApp() {
   const [token, setToken] = useState(() => window.localStorage.getItem(ADMIN_TOKEN_KEY));
   const [activeView, setActiveView] = useState<AdminView>("status");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [selectedProbeId, setSelectedProbeId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem(ADMIN_THEME_KEY) === "dark");
   const [tokenLogFilters, setTokenLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
@@ -109,12 +113,36 @@ export function AdminApp() {
   const runtimeQuery = useQuery({
     queryKey: ["admin-runtime"],
     queryFn: api.getRuntimeSettings,
-    enabled: Boolean(token && activeView === "settings")
+    enabled: Boolean(token && (activeView === "settings" || activeView === "realtime"))
   });
   const auditLogsQuery = useQuery({
     queryKey: ["admin-audit-logs", auditLogFilters],
     queryFn: () => api.listAdminAuditLogs(auditLogFilters),
     enabled: Boolean(token && activeView === "audit")
+  });
+  const announcementsQuery = useQuery({
+    queryKey: ["admin-announcements"],
+    queryFn: api.listAdminAnnouncements,
+    enabled: Boolean(token && activeView === "announcements")
+  });
+  const hwglRoomsQuery = useQuery({
+    queryKey: ["admin-hwgl-rooms"],
+    queryFn: () => api.listAdminHwglRooms(),
+    staleTime: 5 * 60_000,
+    enabled: Boolean(token && activeView === "realtime")
+  });
+  const hwglProbesQuery = useQuery({
+    queryKey: ["admin-hwgl-probes"],
+    queryFn: () => api.listAdminHwglProbes({ limit: 30 }),
+    refetchInterval: activeView === "realtime" ? 5_000 : false,
+    placeholderData: (previous) => previous,
+    enabled: Boolean(token && activeView === "realtime")
+  });
+  const hwglProbeDetailQuery = useQuery({
+    queryKey: ["admin-hwgl-probe", selectedProbeId],
+    queryFn: () => api.getAdminHwglProbe(selectedProbeId as number),
+    refetchInterval: activeView === "realtime" ? 5_000 : false,
+    enabled: Boolean(token && activeView === "realtime" && selectedProbeId)
   });
 
   useEffect(() => {
@@ -349,6 +377,36 @@ export function AdminApp() {
     },
     onError: (error) => setNotice(describeError(error))
   });
+  const createAnnouncementMutation = useMutation({
+    mutationFn: api.createAnnouncement,
+    onSuccess: (announcement) => {
+      setNotice(announcement.is_published ? "公告已发布。" : "公告已保存为草稿。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-announcements"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const updateAnnouncementMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: Parameters<typeof api.updateAnnouncement>[1] }) =>
+      api.updateAnnouncement(id, payload),
+    onSuccess: (announcement) => {
+      setNotice(announcement.is_published ? "公告已更新并发布。" : "公告已保存为草稿。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-announcements"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const deleteAnnouncementMutation = useMutation({
+    mutationFn: api.deleteAnnouncement,
+    onSuccess: () => {
+      setNotice("公告已删除。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-announcements"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
 
   const dataRetentionCleanupMutation = useMutation({
     mutationFn: api.runAdminDataRetentionCleanup,
@@ -384,6 +442,28 @@ export function AdminApp() {
     onError: (error) => setNotice(describeError(error))
   });
 
+  const createHwglProbeMutation = useMutation({
+    mutationFn: api.createAdminHwglProbe,
+    onSuccess: (probe) => {
+      setSelectedProbeId(probe.id);
+      setNotice("实时性探测已开始，worker 会按设定间隔采样。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-rooms"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
+  const stopHwglProbeMutation = useMutation({
+    mutationFn: api.stopAdminHwglProbe,
+    onSuccess: () => {
+      setNotice("实时性探测已停止。");
+      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
+      refreshAdminAudit();
+    },
+    onError: (error) => setNotice(describeError(error))
+  });
+
   if (!token) {
     return <AdminLogin onLogin={handleLogin} />;
   }
@@ -394,91 +474,83 @@ export function AdminApp() {
     { key: "rooms", label: "宿舍", icon: <Building2 size={17} /> },
     { key: "tokens", label: "Token", icon: <KeyRound size={17} /> },
     { key: "smtp", label: "SMTP", icon: <Mail size={17} /> },
+    { key: "realtime", label: "实时性", icon: <Radio size={17} /> },
+    { key: "announcements", label: "公告", icon: <Megaphone size={17} /> },
     { key: "settings", label: "设置", icon: <Database size={17} /> },
     { key: "account", label: "账号", icon: <ShieldCheck size={17} /> },
     { key: "audit", label: "审计", icon: <ScrollText size={17} /> }
   ];
-  const activeNavIndex = Math.max(0, nav.findIndex((item) => item.key === activeView));
+  const activeNav = nav.find((item) => item.key === activeView);
+  const viewDescriptions: Record<AdminView, string> = {
+    status: "掌握校园用电服务的运行全貌，让每一次查询与提醒可靠抵达。",
+    users: "查看用户资料、通知偏好与宿舍绑定，维护每一位用户的服务。",
+    rooms: "从宿舍出发，查看电量监测记录与关联用户。",
+    tokens: "管理电量查询凭据，跟踪可用状态与调用记录。",
+    smtp: "维护发信通道，查看邮件服务健康状态与投递记录。",
+    realtime: "采样与分析后勤数据更新节奏，了解读数的实时性。",
+    announcements: "编辑、发布与管理面向校园用户的服务公告。",
+    settings: "配置运行策略、数据保留与站点外观。",
+    account: "管理个人资料与登录凭据，保护管理权限。",
+    audit: "回溯管理操作，保持平台变更透明可查。"
+  };
 
   return (
-    <div className="app-background admin-app-shell min-h-screen text-foreground">
-      <aside className="app-sidebar liquid-surface glass-panel fixed inset-y-0 left-0 hidden w-64 border-r border-border/70 lg:flex lg:flex-col">
-        <div className="flex h-16 items-center gap-3 border-b border-border px-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <ShieldCheck size={19} />
-          </div>
-          <div>
-            <div className="text-sm font-semibold">Admin Console</div>
-            <div className="text-xs text-muted-foreground">{meQuery.data?.username ?? "管理后台"}</div>
-          </div>
-        </div>
-        <nav
-          className="admin-sidebar-nav relative flex flex-1 flex-col gap-1 px-3 py-4"
-          style={{ "--admin-nav-index": activeNavIndex } as CSSProperties}
-        >
-          <span aria-hidden="true" className="admin-nav-indicator" />
-          {nav.map((item) => (
-            <button
-              key={item.key}
-              aria-current={activeView === item.key ? "page" : undefined}
-              className={`app-nav-item relative z-[1] flex h-9 w-full shrink-0 items-center gap-3 rounded-md px-3 text-sm ${
-                activeView === item.key
-                  ? "app-nav-item-active text-primary"
-                  : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
-              }`}
-              onClick={() => setActiveView(item.key)}
-              type="button"
-            >
-              {item.icon}
-              {item.label}
-            </button>
+    <div className="app-background min-h-screen text-foreground">
+      <aside className="workspace-sidebar fixed inset-y-0 left-0 z-30 hidden w-52 flex-col border-r border-border lg:flex">
+        <a href="/" className="flex min-h-24 items-center gap-3 border-b border-border px-5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-primary text-xl font-semibold text-primary">E</span>
+          <span><span className="block text-sm font-semibold">校园电量</span><span className="mt-1 block text-[10px] tracking-[0.14em] text-muted-foreground">OPERATIONS / SDU</span></span>
+        </a>
+        <nav aria-label="管理模块" className="flex-1 overflow-y-auto px-3 py-4">
+          {nav.map((item, index) => (
+            <div key={item.key}>
+              {index === 0 || index === 3 || index === 7 ? <div className="px-3 pb-2 pt-4 text-[10px] font-medium tracking-[0.16em] text-muted-foreground">{index === 0 ? "01 / 校园" : index === 3 ? "02 / 服务" : "03 / 管理"}</div> : null}
+              <button
+                type="button"
+                aria-current={activeView === item.key ? "page" : undefined}
+                className={`mb-1 flex w-full items-center gap-3 border-l-2 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                  activeView === item.key ? "border-primary bg-primary/10 font-semibold text-primary" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+                onClick={() => setActiveView(item.key)}
+              >
+                <span aria-hidden="true">{item.icon}</span>
+                <span>{item.label === "状态" ? "运行概览" : item.label === "用户" ? "用户管理" : item.label === "宿舍" ? "宿舍管理" : item.label}</span>
+                {activeView === item.key ? <span className="ml-auto text-xs" aria-hidden="true">—</span> : null}
+              </button>
+            </div>
           ))}
         </nav>
         <div className="border-t border-border p-3">
-          <Button className="w-full justify-start" variant="ghost" onClick={handleLogout}>
-            <LogOut size={16} />
-            退出管理后台
-          </Button>
+          <div className="mb-3 flex items-center gap-3 px-2">
+            <ShieldCheck size={19} className="shrink-0 text-primary" />
+            <div className="min-w-0"><div className="truncate text-sm">{meQuery.data?.display_name || meQuery.data?.username || "管理员"}</div><div className="mt-0.5 text-[10px] text-muted-foreground">安全访问 · 操作留痕</div></div>
+          </div>
+          <button type="button" className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={handleLogout}><LogOut size={15} />退出管理后台</button>
         </div>
       </aside>
-
-      <div className="lg:pl-64">
-        <header className="app-topbar liquid-surface glass-panel sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border/70 px-4 lg:px-6">
-          <div>
-            <div className="text-sm font-semibold">管理后台</div>
-            <div className="text-xs text-muted-foreground">{meQuery.data?.display_name || meQuery.data?.username || "正在读取管理员"}</div>
+      <div className="relative min-w-0 lg:pl-52">
+        <header className="workspace-topbar sticky top-0 z-20 flex min-h-16 items-center justify-between gap-3 border-b border-border px-4 sm:px-6 lg:px-8">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground"><span className="hidden sm:inline">Electricity Monitor</span><span className="hidden text-border sm:inline">/</span><span className="text-foreground">{activeNav?.label}</span></div>
+            <div className="mt-1 text-[10px] tracking-[0.16em] text-muted-foreground lg:hidden">QINGDAO · ADMIN</div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              aria-label={darkMode ? "切换为浅色" : "切换为暗色"}
-              className="px-2 sm:px-3"
-              size="sm"
-              title={darkMode ? "切换为浅色" : "切换为暗色"}
-              variant="secondary"
-              onClick={() => setDarkMode((value) => !value)}
-            >
-              {darkMode ? <Sun size={16} /> : <Moon size={16} />}
-              <span className="hidden sm:inline">{darkMode ? "浅色" : "暗色"}</span>
-            </Button>
-            <Button
-              aria-label="退出管理后台"
-              className="px-2 sm:px-3"
-              size="sm"
-              title="退出管理后台"
-              variant="secondary"
-              onClick={handleLogout}
-            >
-              <LogOut size={16} />
-              <span className="hidden sm:inline">退出</span>
-            </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="mr-3 hidden text-xs text-muted-foreground xl:inline">山东大学 · 青岛校区</span>
+            <Button aria-label={darkMode ? "切换为浅色" : "切换为暗色"} size="icon" variant="ghost" onClick={() => setDarkMode((value) => !value)}>{darkMode ? <Sun size={17} /> : <Moon size={17} />}</Button>
+            <Button aria-label="退出管理后台" size="icon" variant="ghost" className="lg:hidden" onClick={handleLogout}><LogOut size={17} /></Button>
+            <div className="hidden border-l border-border pl-4 text-sm text-muted-foreground lg:block">{meQuery.data?.display_name || meQuery.data?.username || "正在读取管理员"}</div>
           </div>
         </header>
 
         <MobileAdminNav activeView={activeView} items={nav} onChange={setActiveView} />
 
-        <main className="app-main-content mx-auto w-full max-w-7xl px-4 pb-24 pt-5 lg:px-6 lg:pb-5">
+        <main className="workspace-main mx-auto w-full max-w-[1560px] pb-28 lg:pb-10">
           <NoticeDialog message={notice} onClose={() => setNotice(null)} />
-          <div key={activeView} className="page-transition">
+          <div className="mb-7 grid gap-4 rounded-xl border border-border/70 bg-panel px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <div><div className="eyebrow">管理工作区 / {String(nav.findIndex((item) => item.key === activeView) + 1).padStart(2, "0")}</div><h1 className="page-heading mt-2">{activeView === "status" ? "运行概览" : activeNav?.label}</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{viewDescriptions[activeView]}</p></div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck size={14} className="text-primary" />管理员专属</div>
+          </div>
+          <div key={activeView} className="min-w-0">
           {activeView === "status" ? (
             <StatusPanel
               onRunChecks={() => runChecksMutation.mutate()}
@@ -565,6 +637,43 @@ export function AdminApp() {
                 }
               }}
               onTest={(id, email) => smtpTestMutation.mutate({ id, email })}
+            />
+          ) : null}
+
+          {activeView === "announcements" ? (
+            <AnnouncementsPanel
+              announcements={announcementsQuery.data ?? []}
+              loading={announcementsQuery.isLoading}
+              saving={createAnnouncementMutation.isPending || updateAnnouncementMutation.isPending}
+              onCreate={(payload) => createAnnouncementMutation.mutate(payload)}
+              onUpdate={(id, payload) => updateAnnouncementMutation.mutate({ id, payload })}
+              onDelete={(id) => {
+                if (window.confirm("确定删除这条公告吗？")) {
+                  deleteAnnouncementMutation.mutate(id);
+                }
+              }}
+            />
+          ) : null}
+
+          {activeView === "realtime" ? (
+            <HwglProbePanel
+              rooms={hwglRoomsQuery.data ?? []}
+              probes={hwglProbesQuery.data ?? []}
+              selectedProbe={hwglProbeDetailQuery.data}
+              selectedProbeId={selectedProbeId}
+              roomsLoading={hwglRoomsQuery.isLoading}
+              probesLoading={hwglProbesQuery.isLoading}
+              detailLoading={hwglProbeDetailQuery.isLoading}
+              creating={createHwglProbeMutation.isPending}
+              stopping={stopHwglProbeMutation.isPending}
+              onSelectProbe={setSelectedProbeId}
+              maxDurationSeconds={runtimeQuery.data?.hwgl_probe_max_duration_seconds}
+              onCreate={(payload) => createHwglProbeMutation.mutate(payload)}
+              onStop={(probeId) => {
+                if (window.confirm("确定停止当前实时性探测吗？已经保存的样本会保留。")) {
+                  stopHwglProbeMutation.mutate(probeId);
+                }
+              }}
             />
           ) : null}
 

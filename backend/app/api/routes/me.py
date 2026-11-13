@@ -1,17 +1,17 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import db_session, verified_user
 from app.core.config import settings
 from app.core.security import hash_password, sign_access_token, verify_password, verify_verification_code
-from app.electricity.client import CampusElectricityClient
 from app.models.check_attempt import CheckAttempt
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.electricity_reading import ElectricityReading
+from app.models.electricity_recharge import ElectricityRecharge
 from app.models.room import Room
 from app.models.user import User
 from app.models.user_room import UserRoom
@@ -28,7 +28,7 @@ from app.schemas.auth import (
 )
 from app.schemas.dashboard import UserRoomDashboardOut, UsageStatsOut
 from app.schemas.binding import UserRoomCreate, UserRoomOut, UserRoomUpdate
-from app.schemas.reading import CheckAttemptOut, ElectricityReadingOut
+from app.schemas.reading import CheckAttemptOut, ElectricityReadingOut, ElectricityRechargeOut
 from app.schemas.runtime import RuntimeLimitsOut
 from app.api.routes.auth import (
     create_verification_code,
@@ -39,6 +39,11 @@ from app.api.routes.auth import (
     normalize_email,
 )
 from app.services.room_checks import check_and_store_room
+from app.services.electricity_queries import (
+    apply_query_resolution,
+    execute_room_query,
+    reading_from_query,
+)
 from app.services.notifications import send_test_email_for_user
 from app.services.rate_limit import (
     account_rate_limit_key,
@@ -48,14 +53,13 @@ from app.services.rate_limit import (
 )
 from app.services.rooms import RoomInputError, normalize_room_data
 from app.services.runtime_settings import get_runtime_config
-from app.services.token_health import record_reserved_token_health
-from app.services.token_pool import reserve_available_token
 from app.services.usage import get_room_usage_stats, list_room_readings
 from app.services.users import delete_user_account
 
 
 router = APIRouter()
 TEST_EMAIL_COOLDOWN = timedelta(minutes=30)
+RECENT_RECHARGE_LIMIT = 12
 ROOM_LOCATION_FIELDS = {"campus", "campus_param", "building_key", "building_name", "building_param", "room_number"}
 
 
@@ -70,12 +74,12 @@ def public_room_check_error(error_kind: str | None) -> tuple[int, dict[str, str]
             "kind": "room_check_unavailable",
             "message": "当前暂无可用的电量查询服务，请稍后再试。",
         }
-    if error_kind in {"auth", "network", "http", "api"}:
+    if error_kind in {"auth", "network", "timeout", "http", "api"}:
         return 502, {
             "kind": "room_check_unavailable",
             "message": "电量查询服务暂时不可用，请稍后再试。",
         }
-    if error_kind == "parse":
+    if error_kind in {"parse", "room_not_found", "room_ambiguous", "no_reading"}:
         return 422, {
             "kind": "room_not_found",
             "message": "没有查询到这个宿舍的电量，请检查宿舍楼和宿舍号是否正确。",
@@ -121,6 +125,11 @@ def find_or_create_room_from_data(db: Session, data: dict) -> Room:
     )
     room = db.scalar(stmt)
     if room is not None:
+        # A custom administrator probe may have created this exact location
+        # as an isolated row.  A real user binding promotes it to a normal
+        # room instead of creating a duplicate (the location is unique).
+        if room.probe_only:
+            room.probe_only = False
         return room
     room = Room(**room_data)
     db.add(room)
@@ -132,24 +141,12 @@ def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
     return find_or_create_room_from_data(db, payload.model_dump())
 
 
-def query_room_balance_once(db: Session, room: Room):
-    token = reserve_available_token()
-    if token is None:
-        raise HTTPException(
-            status_code=503,
-            detail={"kind": "token_unavailable", "message": "当前没有可用的查询 Token，请稍后再试。"},
-        )
-
-    result = CampusElectricityClient(token.token_value).query_room(room)
-    record_reserved_token_health(
-        token.id,
-        success=result.success and result.balance is not None,
-        source="user",
-        error_kind=result.error_kind,
-        error_msg=result.error_msg,
-    )
+def query_room_balance_once(db: Session, room: Room, *, source: str):
+    execution = execute_room_query(room, source=source)
+    result = execution.result
     if result.success and result.balance is not None:
-        return result.balance
+        apply_query_resolution(room, result)
+        return result
 
     status_code, detail = public_room_check_error(result.error_kind)
     raise HTTPException(status_code=status_code, detail=detail)
@@ -205,8 +202,10 @@ def build_dashboard_item(db: Session, binding: UserRoom, *, limit: int = 24) -> 
         alert_days=binding.alert_days,
         alert_threshold_mode=binding.alert_threshold_mode,
         fixed_threshold=binding.low_power_threshold,
+        provider=binding.room.provider,
     )
     recent_readings = list(reversed(readings[-limit:]))
+    recent_recharges = list_room_recharges(db, binding, limit=RECENT_RECHARGE_LIMIT)
     return UserRoomDashboardOut(
         binding_id=binding.id,
         room=binding.room,
@@ -217,7 +216,46 @@ def build_dashboard_item(db: Session, binding: UserRoom, *, limit: int = 24) -> 
         manual_check_available_at=get_manual_check_available_at(db, binding),
         usage=UsageStatsOut(**stats.__dict__),
         recent_readings=recent_readings,
+        recent_recharges=recent_recharges,
     )
+
+
+def list_room_recharges(
+    db: Session,
+    binding: UserRoom,
+    *,
+    limit: int = RECENT_RECHARGE_LIMIT,
+    days: int | None = None,
+) -> list[ElectricityRecharge]:
+    """Return only the recharge records belonging to one user's binding.
+
+    HWGL is the only provider that currently exposes recharge history.  The
+    provider filter is intentional: it prevents a future migration from
+    accidentally mixing records from another provider into this response.
+    """
+    if binding.room is None or binding.room.provider != "hwgl":
+        return []
+    # Older installations may be upgraded before the recharge migration is
+    # applied.  The dashboard should remain usable while that table is absent.
+    if not inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+        return []
+    runtime = get_runtime_config(db)
+    effective_days = days if days is not None else runtime.hwgl_recharge_history_days
+    stmt = (
+        select(ElectricityRecharge)
+        .where(
+            ElectricityRecharge.room_id == binding.room_id,
+            ElectricityRecharge.provider == binding.room.provider,
+        )
+        .order_by(ElectricityRecharge.paid_at.desc(), ElectricityRecharge.id.desc())
+        .limit(max(1, min(limit, 500)))
+    )
+    if effective_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, effective_days))
+        stmt = stmt.where(
+            (ElectricityRecharge.paid_at.is_(None)) | (ElectricityRecharge.paid_at >= cutoff)
+        )
+    return list(db.scalars(stmt))
 
 
 @router.get("/rooms", response_model=list[UserRoomOut])
@@ -277,7 +315,7 @@ def bind_my_room(
     )
     if existing_binding_id is not None:
         raise HTTPException(status_code=409, detail="room already bound")
-    balance = query_room_balance_once(db, room)
+    query_result = query_room_balance_once(db, room, source="bind")
     binding = UserRoom(
         user_id=user.id,
         room_id=room.id,
@@ -289,7 +327,7 @@ def bind_my_room(
     db.add(binding)
     try:
         db.flush()
-        db.add(ElectricityReading(room_id=room.id, balance=balance, source="bind"))
+        db.add(reading_from_query(room.id, query_result, source="bind"))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -356,6 +394,7 @@ def list_my_room_readings(
     return list_room_readings(
         db,
         binding.room_id,
+        provider=binding.room.provider,
         days=effective_days,
         start_at=start_at,
         end_at=end_at,
@@ -376,17 +415,38 @@ def list_all_my_readings(
     stmt = (
         select(ElectricityReading)
         .join(UserRoom, UserRoom.room_id == ElectricityReading.room_id)
-        .where(UserRoom.user_id == user.id)
-        .order_by(ElectricityReading.read_at.desc())
+        .join(Room, Room.id == ElectricityReading.room_id)
+        .where(
+            UserRoom.user_id == user.id,
+            ElectricityReading.provider == Room.provider,
+        )
+        .order_by(
+            func.coalesce(ElectricityReading.provider_updated_at, ElectricityReading.read_at).desc(),
+            ElectricityReading.read_at.desc(),
+            ElectricityReading.id.desc(),
+        )
         .limit(limit)
     )
+    data_at = func.coalesce(ElectricityReading.provider_updated_at, ElectricityReading.read_at)
     if days is not None and start_at is None and end_at is None:
-        stmt = stmt.where(ElectricityReading.read_at >= datetime.now() - timedelta(days=days))
+        stmt = stmt.where(data_at >= datetime.now() - timedelta(days=days))
     if start_at is not None:
-        stmt = stmt.where(ElectricityReading.read_at >= start_at)
+        stmt = stmt.where(data_at >= start_at)
     if end_at is not None:
-        stmt = stmt.where(ElectricityReading.read_at <= end_at)
+        stmt = stmt.where(data_at <= end_at)
     return list(db.scalars(stmt))
+
+
+@router.get("/rooms/{binding_id}/recharges", response_model=list[ElectricityRechargeOut])
+def list_my_room_recharges(
+    binding_id: int,
+    limit: int = Query(default=50, ge=1, le=500),
+    days: int | None = Query(default=None, ge=1, le=730),
+    user: User = Depends(verified_user),
+    db: Session = Depends(db_session),
+) -> list[ElectricityRecharge]:
+    binding = get_my_binding(db, user, binding_id)
+    return list_room_recharges(db, binding, limit=limit, days=days)
 
 
 @router.get("/check-attempts", response_model=list[CheckAttemptOut])
@@ -565,9 +625,9 @@ def update_my_room_binding(
         )
         if existing_binding_id is not None:
             raise HTTPException(status_code=409, detail="room already bound")
-        balance = query_room_balance_once(db, room)
+        query_result = query_room_balance_once(db, room, source="room_update")
         binding.room_id = room.id
-        db.add(ElectricityReading(room_id=room.id, balance=balance, source="room_update"))
+        db.add(reading_from_query(room.id, query_result, source="room_update"))
     if payload.alert_days is not None:
         binding.alert_days = payload.alert_days
     if payload.alert_threshold_mode is not None:

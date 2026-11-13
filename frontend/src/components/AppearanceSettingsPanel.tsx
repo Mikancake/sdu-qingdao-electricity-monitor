@@ -345,7 +345,7 @@ export function AppearanceSettingsPanel({
               </div>
               <div className="appearance-control-card">
                 <Label className="flex items-center justify-between gap-3" htmlFor="appearance-card-opacity">
-                  <span>卡片不透明度</span>
+                  <span>材质厚度</span>
                   <span className="appearance-value">{Math.round(appearanceForm.glass_card_opacity * 100)}%</span>
                 </Label>
                 <input
@@ -358,7 +358,7 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.glass_card_opacity}
                   onChange={(event) => setAppearanceNumber("glass_card_opacity", event.target.value)}
                 />
-                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">数值越低越通透；照片较复杂时建议适当提高。</p>
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">调节纸面与玻璃的融合程度；始终保留可读底色，避免背景干扰数据。</p>
               </div>
               <div className="appearance-control-card">
                 <Label className="flex items-center justify-between gap-3" htmlFor="appearance-card-blur">
@@ -375,7 +375,7 @@ export function AppearanceSettingsPanel({
                   value={appearanceForm.glass_blur_px}
                   onChange={(event) => setAppearanceNumber("glass_blur_px", event.target.value)}
                 />
-                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">同时影响玻璃纹理、边缘质感以及导航层模糊。</p>
+                <p className="mt-2 text-[11px] leading-4 text-muted-foreground">调节玻璃卡片背后的柔化程度；轻量模式不使用模糊。</p>
               </div>
             </div>
 

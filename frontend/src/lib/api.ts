@@ -12,6 +12,9 @@ import type {
   AdminRoom,
   AdminRoomPage,
   AdminManagedUserDetail,
+  AdminHwglProbe,
+  AdminHwglProbeDetail,
+  AdminHwglProbeStartPayload,
   AdminStatus,
   AdminUser,
   Building,
@@ -20,16 +23,22 @@ import type {
   LoginResponse,
   RegisterResponse,
   Reading,
+  ElectricityRecharge,
+  Room,
   RuntimeLimits,
   RuntimeSettings,
   SmtpSettings,
   SmtpHealthLog,
   User,
   UserRoomBinding,
-  UserRoomSummary
+  UserRoomSummary,
+  Announcement,
+  AnnouncementVisibility,
 } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? "http://127.0.0.1:8000" : window.location.origin);
 
 export class ApiError extends Error {
   status: number;
@@ -139,6 +148,7 @@ export interface ApiClient {
     bindingId: number,
     params?: { days?: number; start_at?: string; end_at?: string; limit?: number }
   ) => Promise<Reading[]>;
+  listRoomRecharges: (bindingId: number, params?: { days?: number; limit?: number }) => Promise<ElectricityRecharge[]>;
   listCheckAttempts: () => Promise<CheckAttempt[]>;
   bindRoom: (payload: {
     campus?: string | null;
@@ -212,6 +222,12 @@ export interface ApiClient {
     roomId: number,
     params?: { days?: number; start_at?: string; end_at?: string; limit?: number }
   ) => Promise<Reading[]>;
+  listAdminRoomRecharges: (roomId: number, params?: { days?: number; limit?: number }) => Promise<ElectricityRecharge[]>;
+  listAdminHwglRooms: (params?: { q?: string; limit?: number }) => Promise<Room[]>;
+  listAdminHwglProbes: (params?: { limit?: number }) => Promise<AdminHwglProbe[]>;
+  getAdminHwglProbe: (probeId: number) => Promise<AdminHwglProbeDetail>;
+  createAdminHwglProbe: (payload: AdminHwglProbeStartPayload) => Promise<AdminHwglProbe>;
+  stopAdminHwglProbe: (probeId: number) => Promise<AdminHwglProbe>;
   listAdminTokens: () => Promise<AdminAuthToken[]>;
   createAdminToken: (payload: {
     name: string;
@@ -268,6 +284,19 @@ export interface ApiClient {
   getRuntimeSettings: () => Promise<RuntimeSettings>;
   updateRuntimeSettings: (payload: Partial<RuntimeSettings>) => Promise<RuntimeSettings>;
   getAdminStatus: () => Promise<AdminStatus>;
+  listAnnouncements: () => Promise<Announcement[]>;
+  listAdminAnnouncements: () => Promise<Announcement[]>;
+  createAnnouncement: (payload: {
+    title: string;
+    content: string;
+    is_published: boolean;
+    visibility: AnnouncementVisibility;
+  }) => Promise<Announcement>;
+  updateAnnouncement: (
+    id: number,
+    payload: { title?: string; content?: string; is_published?: boolean; visibility?: AnnouncementVisibility }
+  ) => Promise<Announcement>;
+  deleteAnnouncement: (id: number) => Promise<void>;
   listAdminAuditLogs: (params?: AdminLogQuery) => Promise<AdminAuditLog[]>;
   runAdminChecks: () => Promise<{ checked: number; succeeded: number; failed: number }>;
   runAdminNotifications: () => Promise<{ scanned: number; sent: number; skipped: number; failed: number }>;
@@ -394,6 +423,8 @@ export function createApiClient(token?: string | null): ApiClient {
     listRoomBindings: () => request<UserRoomBinding[]>("/api/me/rooms", {}, token),
     listRoomReadings: (bindingId, params) =>
       request<Reading[]>(`/api/me/rooms/${bindingId}/readings${buildQuery(params)}`, {}, token),
+    listRoomRecharges: (bindingId, params) =>
+      request<ElectricityRecharge[]>(`/api/me/rooms/${bindingId}/recharges${buildQuery(params)}`, {}, token),
     listCheckAttempts: () => request<CheckAttempt[]>("/api/me/check-attempts", {}, token),
     bindRoom: (payload) =>
       request<UserRoomBinding>(
@@ -496,6 +527,30 @@ export function createApiClient(token?: string | null): ApiClient {
       request<AdminRoomPage>(`/api/admin/rooms/page${buildQuery({ ...params })}`, {}, token),
     listAdminRoomReadings: (roomId, params) =>
       request<Reading[]>(`/api/admin/rooms/${roomId}/readings${buildQuery(params)}`, {}, token),
+    listAdminRoomRecharges: (roomId, params) =>
+      request<ElectricityRecharge[]>(`/api/admin/rooms/${roomId}/recharges${buildQuery(params)}`, {}, token),
+    listAdminHwglRooms: (params) =>
+      request<Room[]>(`/api/admin/hwgl-rooms${buildQuery(params)}`, {}, token),
+    listAdminHwglProbes: (params) =>
+      request<AdminHwglProbe[]>(`/api/admin/hwgl-probes${buildQuery(params)}`, {}, token),
+    getAdminHwglProbe: (probeId) => request<AdminHwglProbeDetail>(`/api/admin/hwgl-probes/${probeId}`, {}, token),
+    createAdminHwglProbe: (payload) =>
+      request<AdminHwglProbe>(
+        "/api/admin/hwgl-probes",
+        {
+          method: "POST",
+          body: JSON.stringify(payload)
+        },
+        token
+      ),
+    stopAdminHwglProbe: (probeId) =>
+      request<AdminHwglProbe>(
+        `/api/admin/hwgl-probes/${probeId}/stop`,
+        {
+          method: "POST"
+        },
+        token
+      ),
     listAdminTokens: () => request<AdminAuthToken[]>("/api/admin/tokens", {}, token),
     createAdminToken: (payload) =>
       request<AdminAuthToken>(
@@ -615,6 +670,22 @@ export function createApiClient(token?: string | null): ApiClient {
         token
       ),
     getAdminStatus: () => request<AdminStatus>("/api/admin/status", {}, token),
+    listAnnouncements: () => request<Announcement[]>("/api/announcements", {}, token),
+    listAdminAnnouncements: () => request<Announcement[]>("/api/admin/announcements", {}, token),
+    createAnnouncement: (payload) =>
+      request<Announcement>(
+        "/api/admin/announcements",
+        { method: "POST", body: JSON.stringify(payload) },
+        token
+      ),
+    updateAnnouncement: (id, payload) =>
+      request<Announcement>(
+        `/api/admin/announcements/${id}`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+        token
+      ),
+    deleteAnnouncement: (id) =>
+      request<void>(`/api/admin/announcements/${id}`, { method: "DELETE" }, token),
     listAdminAuditLogs: (params) =>
       request<AdminAuditLog[]>(`/api/admin/audit-logs${buildQuery(params ? { ...params } : undefined)}`, {}, token),
     runAdminChecks: () =>

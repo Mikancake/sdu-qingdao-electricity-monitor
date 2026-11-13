@@ -230,8 +230,8 @@ export function UsersPanel({
   const visibleUsers = pageData?.items ?? [];
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
-      <Card>
+    <div className="grid min-w-0 items-start gap-5 2xl:grid-cols-[minmax(0,1fr)_400px]">
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>用户列表</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">查看注册用户、邮箱验证状态和绑定宿舍数量。</p>
@@ -315,7 +315,7 @@ export function UsersPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>用户详情</CardTitle>
         </CardHeader>

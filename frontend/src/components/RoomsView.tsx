@@ -128,18 +128,28 @@ export function RoomsView({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
-      <Card>
-        <CardHeader>
-          <CardTitle>{isEditing ? "编辑宿舍" : "绑定宿舍"}</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">
+    <div className="space-y-6">
+      <header className="page-section-header">
+        <p className="eyebrow">宿舍管理</p>
+        <h1 className="page-heading mt-2 text-3xl sm:text-4xl">我的宿舍</h1>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">每个房间，独立监测。管理绑定、手动查询与低电量提醒。</p>
+      </header>
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <Card className="min-w-0 xl:order-2">
+        <CardHeader className="border-b border-border bg-muted">
+          <div className="mb-3 flex items-center gap-2 text-xs font-medium text-primary">
+            {isEditing ? <Edit3 size={16} /> : <Plus size={16} />}
+            <span>{isEditing ? "修改绑定" : "新建绑定"}</span>
+          </div>
+          <CardTitle className="text-lg">{isEditing ? "编辑宿舍信息" : "添加宿舍"}</CardTitle>
+          <p className="mt-2 text-xs leading-6 text-muted-foreground">
             {isEditing
               ? "修改宿舍楼、宿舍号和提醒阈值，保存时会重新查询一次电量。"
               : "选择宿舍楼并填写宿舍号，添加时会先查询一次电量，用来确认宿舍存在。"}
           </p>
         </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={submit}>
+        <CardContent className="pt-5">
+          <form className="space-y-5" onSubmit={submit}>
             <div>
               <Label htmlFor="building">宿舍楼</Label>
               <Select id="building" value={buildingKey} onChange={(event) => setBuildingKey(event.target.value)}>
@@ -161,7 +171,7 @@ export function RoomsView({
                 required
               />
             </div>
-            <div className="grid gap-3">
+            <div className="grid gap-4 border-t border-border pt-5">
               <div>
                 <Label htmlFor="threshold-mode">提醒方式</Label>
                 <Select
@@ -223,11 +233,11 @@ export function RoomsView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>已绑定宿舍</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section aria-labelledby="bound-rooms-heading" className="min-w-0 xl:order-1">
+        <div className="rooms-list-heading mb-4 flex items-center justify-between gap-3">
+          <h2 id="bound-rooms-heading" className="text-base font-semibold">监测列表</h2>
+          <Badge tone="muted">{bindings.length} 个已绑定</Badge>
+        </div>
           {loading ? (
             <ListSkeleton rows={3} />
           ) : bindings.length === 0 ? (
@@ -237,69 +247,66 @@ export function RoomsView({
               icon={<Building2 size={28} />}
             />
           ) : (
-            <div className="responsive-table-shell rounded-lg border border-border">
-              <table className="responsive-table w-full border-collapse text-sm">
-                <thead className="bg-muted text-left text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">宿舍</th>
-                    <th className="px-4 py-3 font-medium">提醒</th>
-                    <th className="px-4 py-3 font-medium">状态</th>
-                    <th className="px-4 py-3 font-medium">创建时间</th>
-                    <th className="px-4 py-3 text-right font-medium">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bindings.map((binding) => {
-                    const checking = checkingId === binding.id;
-                    const updating = updatingId === binding.id;
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+              {bindings.map((binding) => {
+                const checking = checkingId === binding.id;
+                const updating = updatingId === binding.id;
 
-                    return (
-                      <tr key={binding.id} className="border-t border-border">
-                        <td data-label="宿舍" className="px-4 py-3">
-                          <div className="font-medium">
-                            {binding.room.building_name} {binding.room.room_number}
+                return (
+                  <Card key={binding.id} className={editingBindingId === binding.id ? "border-primary" : undefined}>
+                    <CardContent>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-primary"><Building2 size={20} /></div>
+                          <div className="min-w-0">
+                            <p className="text-xs text-muted-foreground">{binding.room.building_name}</p>
+                            <h3 className="mt-1 break-words text-xl font-semibold">{binding.room.room_number}</h3>
                           </div>
-                        </td>
-                        <td data-label="提醒" className="px-4 py-3 text-muted-foreground">
-                          {binding.alert_threshold_mode === "fixed" && binding.low_power_threshold
-                            ? `低于 ${formatKwh(binding.low_power_threshold)}`
-                            : binding.alert_threshold_mode === "average"
-                              ? "低于 1 天用电量"
-                              : `低于约 ${binding.alert_days} 天余量`}
-                        </td>
-                        <td data-label="状态" className="px-4 py-3">
-                          <Badge tone={binding.enabled ? "success" : "muted"}>{binding.enabled ? "启用" : "停用"}</Badge>
-                        </td>
-                        <td data-label="创建时间" className="px-4 py-3 text-muted-foreground">{formatDateTime(binding.created_at)}</td>
-                        <td data-label="操作" className="px-4 py-3">
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <Button size="icon" variant="ghost" title="编辑宿舍" onClick={() => beginEdit(binding)}>
-                              <Edit3 size={15} />
-                            </Button>
-                            <CooldownRefreshButton
-                              availableAt={manualCheckAvailableAtByBinding[binding.id]}
-                              checking={checking}
-                              compact
-                              onClick={() => onCheckRoom(binding.id)}
-                            />
-                            <Button size="sm" variant="ghost" disabled={updating} onClick={() => onToggleRoom(binding)}>
-                              {updating ? <Loader2 className="animate-spin" size={14} /> : null}
-                              {binding.enabled ? "停用" : "启用"}
-                            </Button>
-                            <Button size="icon" variant="ghost" title="删除绑定" onClick={() => onDeleteRoom(binding.id)}>
-                              <Trash2 size={15} />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                        <Badge tone={binding.enabled ? "success" : "muted"}>{binding.enabled ? "监测中" : "已停用"}</Badge>
+                      </div>
+                      <dl className="mt-5 grid gap-4 border-t border-border pt-4 text-xs sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <dt className="text-muted-foreground">提醒条件</dt>
+                          <dd className="font-medium">
+                            {binding.alert_threshold_mode === "fixed" && binding.low_power_threshold
+                              ? `低于 ${formatKwh(binding.low_power_threshold)}`
+                              : binding.alert_threshold_mode === "average"
+                                ? "低于 1 天用电量"
+                                : `低于约 ${binding.alert_days} 天余量`}
+                          </dd>
+                        </div>
+                        <div className="space-y-2">
+                          <dt className="text-muted-foreground">绑定时间</dt>
+                          <dd>{formatDateTime(binding.created_at)}</dd>
+                        </div>
+                      </dl>
+                      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+                        <CooldownRefreshButton
+                          availableAt={manualCheckAvailableAtByBinding[binding.id]}
+                          checking={checking}
+                          compact
+                          onClick={() => onCheckRoom(binding.id)}
+                        />
+                        <Button size="sm" variant="secondary" onClick={() => beginEdit(binding)}>
+                          <Edit3 size={14} /> 编辑
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={updating} onClick={() => onToggleRoom(binding)}>
+                          {updating ? <Loader2 className="animate-spin" size={14} /> : null}
+                          {binding.enabled ? "停用" : "启用"}
+                        </Button>
+                        <Button className="ml-auto text-danger hover:text-danger" size="icon" variant="ghost" aria-label={`删除 ${binding.room.building_name} ${binding.room.room_number} 绑定`} title="删除绑定" onClick={() => onDeleteRoom(binding.id)}>
+                          <Trash2 size={15} />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
-        </CardContent>
-      </Card>
+      </section>
+      </div>
     </div>
   );
 }

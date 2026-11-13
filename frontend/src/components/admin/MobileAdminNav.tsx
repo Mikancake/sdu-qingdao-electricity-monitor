@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { MoreHorizontal, X } from "lucide-react";
 
 import type { AdminView } from "./utils";
@@ -27,9 +28,7 @@ export function MobileAdminNav({
   const sheetRef = useRef<HTMLDivElement>(null);
   const primaryItems = items.filter((item) => primaryKeys.includes(item.key));
   const secondaryItems = items.filter((item) => !primaryKeys.includes(item.key));
-  const activePrimaryIndex = primaryItems.findIndex((item) => item.key === activeView);
-  const indicatorIndex = activePrimaryIndex >= 0 ? activePrimaryIndex : primaryItems.length;
-  const secondaryActive = activePrimaryIndex < 0;
+  const secondaryActive = !primaryKeys.includes(activeView);
 
   useEffect(() => {
     if (!open) return;
@@ -72,20 +71,18 @@ export function MobileAdminNav({
     setOpen(false);
   };
 
-  return (
+  return createPortal(
     <>
       <nav
         aria-label="管理后台移动导航"
-        className="admin-mobile-bottom-nav liquid-surface glass-panel fixed grid grid-cols-5 gap-1 lg:hidden"
-        style={{ "--mobile-admin-offset": `${indicatorIndex * 100}%` } as CSSProperties}
+        className="fixed inset-x-0 bottom-0 z-50 grid grid-cols-5 border-t border-border bg-panel px-2 pb-[calc(8px+env(safe-area-inset-bottom))] pt-2 text-foreground lg:hidden"
       >
-        <span aria-hidden="true" className="admin-mobile-nav-indicator" />
         {primaryItems.map((item) => (
           <button
             key={item.key}
             aria-current={activeView === item.key ? "page" : undefined}
-            className={`app-nav-item admin-mobile-nav-item relative z-[1] ${
-              activeView === item.key ? "text-primary" : "text-muted-foreground"
+            className={`flex min-h-14 flex-col items-center justify-center gap-1.5 border-t-2 px-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+              activeView === item.key ? "border-primary bg-primary/5 font-semibold text-primary" : "border-transparent text-muted-foreground hover:bg-muted"
             }`}
             onClick={() => select(item.key)}
             type="button"
@@ -97,51 +94,54 @@ export function MobileAdminNav({
         <button
           ref={moreButtonRef}
           aria-expanded={open}
-          className={`app-nav-item admin-mobile-nav-item relative z-[1] ${secondaryActive ? "text-primary" : "text-muted-foreground"}`}
+          aria-controls="admin-more-menu"
+          aria-haspopup="dialog"
+          className={`flex min-h-14 flex-col items-center justify-center gap-1.5 border-t-2 px-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${secondaryActive ? "border-primary bg-primary/5 font-semibold text-primary" : "border-transparent text-muted-foreground hover:bg-muted"}`}
           onClick={() => setOpen(true)}
           type="button"
         >
           <MoreHorizontal size={18} />
-          <span>更多</span>
+          <span>{secondaryActive ? items.find((item) => item.key === activeView)?.label : "更多"}</span>
         </button>
       </nav>
 
       {open ? (
-        <div className="mobile-sheet-backdrop fixed inset-0 z-[70] flex items-end lg:hidden" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-[70] flex items-end bg-black/50 text-foreground lg:hidden" onClick={() => setOpen(false)}>
           <div
             ref={sheetRef}
+            id="admin-more-menu"
             aria-labelledby="admin-more-title"
             aria-modal="true"
-            className="mobile-sheet glass-panel w-full rounded-t-[24px] border border-border px-4 pb-[calc(20px+env(safe-area-inset-bottom))] pt-3"
+            className="max-h-[85dvh] w-full overflow-y-auto rounded-t-xl border border-border bg-panel px-4 pb-[calc(24px+env(safe-area-inset-bottom))] pt-4 shadow-xl sm:px-6"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
           >
-            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-foreground/15" />
-            <div className="mb-3 flex items-center justify-between">
+            <div className="eyebrow mb-4">全部管理模块</div>
+            <div className="mb-5 flex items-center justify-between">
               <div>
-                <div id="admin-more-title" className="text-sm font-semibold">更多管理功能</div>
-                <div className="mt-1 text-xs text-muted-foreground">Token、邮件、账号与审计</div>
+                <div id="admin-more-title" className="font-serif text-2xl">管理工作区</div>
+                <div className="mt-1 text-xs text-muted-foreground">服务配置、内容发布与安全管理</div>
               </div>
               <button
                 ref={closeRef}
                 aria-label="关闭更多菜单"
-                className="app-control flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:bg-muted"
+                className="flex h-11 w-11 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 onClick={() => setOpen(false)}
                 type="button"
               >
                 <X size={19} />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2">
               {secondaryItems.map((item) => (
                 <button
                   key={item.key}
                   aria-current={activeView === item.key ? "page" : undefined}
-                  className={`mobile-sheet-action ${activeView === item.key ? "mobile-sheet-action-active" : ""}`}
+                  className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-4 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${activeView === item.key ? "border-primary/40 bg-primary/10 font-semibold text-primary" : "border-border bg-background text-foreground hover:border-primary/30"}`}
                   onClick={() => select(item.key)}
                   type="button"
                 >
-                  <span className="mobile-sheet-action-icon">{item.icon}</span>
+                  <span className="shrink-0 text-primary">{item.icon}</span>
                   <span>{item.label}</span>
                 </button>
               ))}
@@ -149,6 +149,7 @@ export function MobileAdminNav({
           </div>
         </div>
       ) : null}
-    </>
+    </>,
+    document.body
   );
 }

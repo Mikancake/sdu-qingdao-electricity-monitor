@@ -12,6 +12,8 @@ type RuntimeNumberSettingKey =
   | "check_request_delay_seconds"
   | "notify_interval_seconds"
   | "notify_cooldown_hours"
+  | "default_alert_days"
+  | "default_daily_usage_kwh"
   | "worker_idle_seconds"
   | "manual_check_cooldown_seconds"
   | "max_rooms_per_user"
@@ -21,7 +23,11 @@ type RuntimeNumberSettingKey =
   | "electricity_reading_retention_days"
   | "admin_audit_log_retention_days"
   | "scheduled_job_run_retention_days"
-  | "retention_cleanup_hour";
+  | "retention_cleanup_hour"
+  | "hwgl_metadata_sync_interval_seconds"
+  | "hwgl_metadata_history_days"
+  | "hwgl_recharge_history_days"
+  | "hwgl_probe_max_duration_seconds";
 
 export function RuntimeSettingsPanel({
   runtime,
@@ -82,7 +88,7 @@ export function RuntimeSettingsPanel({
         onUploadBackground={onUploadAppearanceBackground}
       />
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
       <CardHeader>
         <CardTitle>全局任务设置</CardTitle>
       </CardHeader>
@@ -113,6 +119,29 @@ export function RuntimeSettingsPanel({
           <div>
             <Label htmlFor="notify-cooldown">通知冷却（小时）</Label>
             <Input id="notify-cooldown" type="number" value={form.notify_cooldown_hours} onChange={(event) => setNumber("notify_cooldown_hours", event.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="default-alert-days">默认提醒天数</Label>
+            <Input
+              id="default-alert-days"
+              type="number"
+              min={1}
+              max={30}
+              value={form.default_alert_days}
+              onChange={(event) => setNumber("default_alert_days", event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="default-daily-usage">默认日均用电（度/天）</Label>
+            <Input
+              id="default-daily-usage"
+              type="number"
+              min={0.1}
+              max={100}
+              step="0.1"
+              value={form.default_daily_usage_kwh}
+              onChange={(event) => setNumber("default_daily_usage_kwh", event.target.value)}
+            />
           </div>
           <div>
             <Label htmlFor="worker-idle">Worker 空闲轮询（秒）</Label>
@@ -226,7 +255,67 @@ export function RuntimeSettingsPanel({
       </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
+        <CardHeader>
+          <CardTitle>HWGL 数据与探测</CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            这些设置只影响使用新电费系统的宿舍。元数据同步由 worker 执行，实时性探测仍然需要在“实时性”页面手动启动。
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <Label htmlFor="hwgl-sync-interval">扩展数据同步周期（秒）</Label>
+              <Input
+                id="hwgl-sync-interval"
+                type="number"
+                min={60}
+                value={form.hwgl_metadata_sync_interval_seconds}
+                onChange={(event) => setNumber("hwgl_metadata_sync_interval_seconds", event.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="hwgl-history-days">日用电历史窗口（天）</Label>
+              <Input
+                id="hwgl-history-days"
+                type="number"
+                min={1}
+                value={form.hwgl_metadata_history_days}
+                onChange={(event) => setNumber("hwgl_metadata_history_days", event.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="hwgl-recharge-days">充值记录窗口（天）</Label>
+              <Input
+                id="hwgl-recharge-days"
+                type="number"
+                min={1}
+                value={form.hwgl_recharge_history_days}
+                onChange={(event) => setNumber("hwgl_recharge_history_days", event.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="hwgl-probe-duration">探测最长持续时间（秒）</Label>
+              <Input
+                id="hwgl-probe-duration"
+                type="number"
+                min={60}
+                value={form.hwgl_probe_max_duration_seconds}
+                onChange={(event) => setNumber("hwgl_probe_max_duration_seconds", event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            修改后由 worker 读取最新值。探测间隔仍只允许 60、120、300 秒，最长持续时间还会受到服务器环境变量上限约束。
+          </div>
+          <Button disabled={saving} onClick={() => onSave(form)}>
+            {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存 HWGL 设置
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>防滥用限制</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">

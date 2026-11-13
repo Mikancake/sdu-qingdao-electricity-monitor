@@ -7,15 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.electricity.client import CampusElectricityClient
 from app.models.check_attempt import CheckAttempt
 from app.models.electricity_reading import ElectricityReading
 from app.models.room import Room
 from app.models.user import User
 from app.models.user_room import UserRoom
 from app.services.runtime_settings import get_runtime_config
-from app.services.token_health import record_reserved_token_health
-from app.services.token_pool import reserve_available_token
+from app.services.electricity_queries import apply_query_resolution, execute_room_query, reading_from_query
 
 
 def now_like(value: datetime | None = None) -> datetime:
@@ -62,23 +60,9 @@ def check_and_store_room(
     db.flush()
     db.commit()
 
-    token = reserve_available_token()
-    if token is None:
-        attempt.error_kind = "token"
-        attempt.error_msg = "no enabled auth token"
-        attempt.finished_at = datetime.now()
-        db.commit()
-        return RoomCheckOutcome(room_id=room.id, success=False, error_kind="token", error_msg="no enabled auth token")
-
-    attempt.auth_token_id = token.id
-    result = CampusElectricityClient(token.token_value).query_room(room)
-    record_reserved_token_health(
-        token.id,
-        success=result.success and result.balance is not None,
-        source=source,
-        error_kind=result.error_kind,
-        error_msg=result.error_msg,
-    )
+    execution = execute_room_query(room, source=source)
+    result = execution.result
+    attempt.auth_token_id = execution.auth_token_id
     if not result.success or result.balance is None:
         attempt.error_kind = result.error_kind
         attempt.error_msg = result.error_msg
@@ -91,7 +75,8 @@ def check_and_store_room(
             error_msg=result.error_msg,
         )
 
-    reading = ElectricityReading(room_id=room.id, balance=result.balance, source=source)
+    apply_query_resolution(room, result)
+    reading = reading_from_query(room.id, result, source=source)
     db.add(reading)
     db.flush()
     attempt.success = True
@@ -108,10 +93,14 @@ def check_and_store_room(
     )
 
 
-def latest_read_at(db: Session, room_id: int) -> datetime | None:
+def latest_read_at(db: Session, room_id: int, *, provider: str | None = None) -> datetime | None:
+    current_provider = provider or db.scalar(select(Room.provider).where(Room.id == room_id))
     return db.scalar(
         select(ElectricityReading.read_at)
-        .where(ElectricityReading.room_id == room_id)
+        .where(
+            ElectricityReading.room_id == room_id,
+            ElectricityReading.provider == current_provider,
+        )
         .order_by(ElectricityReading.read_at.desc())
         .limit(1)
     )
@@ -137,6 +126,8 @@ def list_due_rooms(db: Session, *, limit: int | None = None) -> list[Room]:
             ElectricityReading.room_id.label("room_id"),
             func.max(ElectricityReading.read_at).label("last_read_at"),
         )
+        .join(Room, Room.id == ElectricityReading.room_id)
+        .where(ElectricityReading.provider == Room.provider)
         .group_by(ElectricityReading.room_id)
         .subquery()
     )

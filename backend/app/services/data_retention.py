@@ -8,10 +8,12 @@ from app.db.session import SessionLocal
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.check_attempt import CheckAttempt
 from app.models.electricity_reading import ElectricityReading
+from app.models.electricity_recharge import ElectricityRecharge
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.email_delivery_log import EmailDeliveryLog
 from app.models.notification import Notification
 from app.models.scheduled_job_run import ScheduledJobRun
+from app.models.hwgl_probe import HwglProbeSample, HwglProbeSession
 from app.services.runtime_settings import RuntimeConfig, get_runtime_config
 
 
@@ -24,6 +26,9 @@ class DataRetentionCleanupResult:
     electricity_readings_deleted: int = 0
     admin_audit_logs_deleted: int = 0
     scheduled_job_runs_deleted: int = 0
+    electricity_recharges_deleted: int = 0
+    hwgl_probe_samples_deleted: int = 0
+    hwgl_probe_sessions_deleted: int = 0
 
     @property
     def total_deleted(self) -> int:
@@ -35,6 +40,9 @@ class DataRetentionCleanupResult:
             + self.electricity_readings_deleted
             + self.admin_audit_logs_deleted
             + self.scheduled_job_runs_deleted
+            + self.electricity_recharges_deleted
+            + self.hwgl_probe_samples_deleted
+            + self.hwgl_probe_sessions_deleted
         )
 
 
@@ -58,6 +66,9 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
     electricity_readings_deleted = 0
     admin_audit_logs_deleted = 0
     scheduled_job_runs_deleted = 0
+    electricity_recharges_deleted = 0
+    hwgl_probe_samples_deleted = 0
+    hwgl_probe_sessions_deleted = 0
 
     verification_cutoff = _cutoff(runtime.verification_code_retention_days)
     if verification_cutoff is not None:
@@ -99,6 +110,20 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
         )
         scheduled_job_runs_deleted = _rowcount(result.rowcount)
 
+    if reading_cutoff is not None:
+        result = db.execute(delete(ElectricityRecharge).where(ElectricityRecharge.created_at < reading_cutoff))
+        electricity_recharges_deleted = _rowcount(result.rowcount)
+    if scheduled_job_cutoff is not None:
+        result = db.execute(delete(HwglProbeSample).where(HwglProbeSample.created_at < scheduled_job_cutoff))
+        hwgl_probe_samples_deleted = _rowcount(result.rowcount)
+        result = db.execute(
+            delete(HwglProbeSession).where(
+                HwglProbeSession.created_at < scheduled_job_cutoff,
+                HwglProbeSession.status.in_(("finished", "stopped", "failed")),
+            )
+        )
+        hwgl_probe_sessions_deleted = _rowcount(result.rowcount)
+
     db.commit()
     return DataRetentionCleanupResult(
         verification_codes_deleted=verification_codes_deleted,
@@ -108,6 +133,9 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
         electricity_readings_deleted=electricity_readings_deleted,
         admin_audit_logs_deleted=admin_audit_logs_deleted,
         scheduled_job_runs_deleted=scheduled_job_runs_deleted,
+        electricity_recharges_deleted=electricity_recharges_deleted,
+        hwgl_probe_samples_deleted=hwgl_probe_samples_deleted,
+        hwgl_probe_sessions_deleted=hwgl_probe_sessions_deleted,
     )
 
 

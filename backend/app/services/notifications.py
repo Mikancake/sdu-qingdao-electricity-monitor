@@ -78,9 +78,18 @@ def _format_value(value, suffix: str = "") -> str:
 
 
 def _format_daily_usage(stats) -> str:
-    if stats.average_daily_usage is None:
-        return "暂无（至少需要有效下降读数）"
-    return _format_value(stats.average_daily_usage, " 度/天")
+    value = stats.estimated_daily_usage
+    if value is None:
+        return "暂无（有效样本不足）"
+    source = stats.estimated_daily_usage_source
+    suffix = {
+        "default": "默认估算",
+        "provider_reported_historical": "上一段活跃期参考",
+        "measured_historical": "上一段活跃期参考",
+        "provider_reported": "上游日用电",
+        "measured": "余额下降实测",
+    }.get(source, "估算")
+    return f"{_format_value(value, ' 度/天')}（{suffix}）"
 
 
 def _format_days_remaining(stats) -> str:
@@ -137,12 +146,17 @@ def _room_card(binding: UserRoom, stats, *, readings_available: bool = True) -> 
             </td>
           </tr>
         """
-    elif stats.average_daily_usage_source != "measured":
+    elif stats.average_daily_usage_source not in {
+        "measured",
+        "measured_historical",
+        "provider_reported",
+        "provider_reported_historical",
+    }:
         note = """
           <tr>
             <td style="padding:14px 0 0;">
               <div style="border-radius:12px;background:#f8fafc;border:1px solid #e8edf5;padding:11px 12px;color:#667085;font-size:13px;line-height:1.7;">
-                历史读数还不足以计算实测日均用电；低电量判断会先使用默认日均作为兜底。
+                当前有效历史样本不足，日均用电暂按默认值估算；获得新的完整日读数后会自动切换为实测结果。
               </div>
             </td>
           </tr>
@@ -285,8 +299,13 @@ def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom],
         )
         if not readings:
             lines.extend(["还没有历史读数，下一次同步后日报会更准确。", ""])
-        elif stats.average_daily_usage_source != "measured":
-            lines.extend(["历史读数还不足以计算实测日均用电，暂不展示实测日均。", ""])
+        elif stats.average_daily_usage_source not in {
+            "measured",
+            "measured_historical",
+            "provider_reported",
+            "provider_reported_historical",
+        }:
+            lines.extend(["有效历史样本不足，日均用电暂按默认值估算。", ""])
         cards.append(_room_card(binding, stats, readings_available=bool(readings)))
 
     if test:

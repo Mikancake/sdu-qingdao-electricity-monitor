@@ -1,12 +1,13 @@
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
-import type { Reading } from "../lib/types";
+import type { ElectricityRecharge, Reading } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 
 interface PowerChartProps {
   readings: Reading[];
   averageDailyUsage?: string | number | null;
+  recharges?: ElectricityRecharge[];
 }
 
 interface ChartPoint {
@@ -14,6 +15,9 @@ interface ChartPoint {
   label: string;
   balance: number;
   charging: boolean;
+  reportedDailyUsage?: number | null;
+  powerStatus?: string | null;
+  provider?: string;
 }
 
 interface PositionedPoint extends ChartPoint {
@@ -24,6 +28,12 @@ interface PositionedPoint extends ChartPoint {
 interface TimePeriod {
   tick: number;
   label: string;
+}
+
+interface RechargeMarker {
+  id: number;
+  timestamp: number;
+  amount?: number | null;
 }
 
 const clockFormatter = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
@@ -160,9 +170,8 @@ function useCompactChart() {
   return compact;
 }
 
-function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
+function PowerChartComponent({ readings, averageDailyUsage, recharges = [] }: PowerChartProps) {
   const compact = useCompactChart();
-  const gradientId = useId().replace(/:/g, "");
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = 760;
@@ -172,15 +181,21 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
   const data = useMemo<ChartPoint[]>(() => {
     const sorted = readings
       .map((item) => ({
-        timestamp: new Date(item.read_at).getTime(),
-        label: formatDateTime(item.read_at),
-        balance: Number(item.balance)
+        timestamp: new Date(item.provider_updated_at ?? item.read_at).getTime(),
+        label: formatDateTime(item.provider_updated_at ?? item.read_at),
+        balance: Number(item.balance),
+        reportedDailyUsage: item.reported_daily_usage ? Number(item.reported_daily_usage) : null,
+        powerStatus: item.power_status,
+        provider: item.provider
       }))
       .filter((item) => Number.isFinite(item.timestamp) && Number.isFinite(item.balance))
       .sort((first, second) => first.timestamp - second.timestamp);
-    return sorted.map((item, index) => ({
+    // One HWGL source update may be fetched more than once. Keep one chart point for
+    // that real upstream timestamp instead of drawing overlapping artificial points.
+    const unique = Array.from(new Map(sorted.map((item) => [`${item.provider ?? "unknown"}:${item.timestamp}`, item])).values());
+    return unique.map((item, index) => ({
       ...item,
-      charging: index > 0 && item.balance - sorted[index - 1].balance > 0.05
+      charging: index > 0 && item.balance - unique[index - 1].balance > 0.05
     }));
   }, [readings]);
 
@@ -214,6 +229,13 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
       : "";
     const regularPoints = renderedPoints.filter((point) => !point.charging);
     const chargingPoints = renderedPoints.filter((point) => point.charging);
+    const rechargeMarkers: RechargeMarker[] = recharges
+      .map((recharge) => ({
+        id: recharge.id,
+        timestamp: new Date(recharge.paid_at ?? recharge.fetched_at).getTime(),
+        amount: recharge.amount ? Number(recharge.amount) : null
+      }))
+      .filter((marker) => Number.isFinite(marker.timestamp) && marker.timestamp >= firstTimestamp && marker.timestamp <= domainEnd);
     return {
       firstTimestamp,
       domainEnd,
@@ -229,18 +251,24 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
       areaPath,
       regularDotsPath: dotsPath(regularPoints, compact ? 2.4 : 2.7),
       chargingDotsPath: dotsPath(chargingPoints, compact ? 3.3 : 3.7),
+      rechargeMarkers,
       periods: buildTimePeriods(firstTimestamp, domainEnd, data.length, compact),
       showAverage,
       trendStart,
       trendEnd
     };
-  }, [averageDailyUsage, compact, data, height, padding.bottom, padding.left, padding.right, padding.top]);
+  }, [averageDailyUsage, compact, data, height, padding.bottom, padding.left, padding.right, padding.top, recharges]);
 
   const selectFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!data.length || !containerRef.current) return;
-    const bounds = containerRef.current.getBoundingClientRect();
-    const localX = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
-    const timestamp = chart.firstTimestamp + localX * (chart.domainEnd - chart.firstTimestamp);
+    const svg = containerRef.current.querySelector("svg");
+    if (!svg) return;
+    const bounds = svg.getBoundingClientRect();
+    if (bounds.width <= 0) return;
+    const viewBoxX = ((event.clientX - bounds.left) / bounds.width) * width;
+    const plotX = Math.min(width - padding.right, Math.max(padding.left, viewBoxX));
+    const ratio = (plotX - padding.left) / chart.plotWidth;
+    const timestamp = chart.firstTimestamp + ratio * (chart.domainEnd - chart.firstTimestamp);
     const index = nearestPointIndex(data, timestamp);
     setActiveIndex((current) => (current === index ? current : index));
   };
@@ -251,7 +279,7 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
   return (
     <div
       ref={containerRef}
-      className="power-chart relative w-full touch-pan-y select-none"
+      className="power-chart relative w-full touch-pan-y select-none rounded-sm border border-border bg-muted/20 p-3"
       onPointerDown={selectFromPointer}
       onPointerMove={selectFromPointer}
       onPointerLeave={() => setActiveIndex(null)}
@@ -262,12 +290,6 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
         role="img"
         viewBox={`0 0 ${width} ${height}`}
       >
-        <defs>
-          <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.28" />
-            <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0.015" />
-          </linearGradient>
-        </defs>
 
         {yTicks.map((ratio) => {
           const y = padding.top + chart.plotHeight * (1 - ratio);
@@ -292,7 +314,7 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
           </text>
         ))}
 
-        {chart.areaPath ? <path className="power-chart-area" d={chart.areaPath} fill={`url(#${gradientId})`} /> : null}
+        {chart.areaPath ? <path className="power-chart-area" d={chart.areaPath} fill="hsl(var(--primary) / 0.12)" /> : null}
         {chart.showAverage ? (
           <g className="power-chart-average">
             <line
@@ -304,6 +326,16 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
             {!compact ? <text x={width - padding.right} y={chart.yFor(chart.trendEnd) - 7} textAnchor="end">日均趋势参考</text> : null}
           </g>
         ) : null}
+        {chart.rechargeMarkers.map((marker) => {
+          const x = chart.xFor(marker.timestamp);
+          return (
+            <g key={marker.id} className="power-chart-recharge">
+              <title>{marker.amount != null ? `充值 ¥${marker.amount.toFixed(2)}` : "充值记录"}</title>
+              <line x1={x} x2={x} y1={padding.top} y2={chart.baseline} />
+              <circle cx={x} cy={padding.top + 5} r={3.5} />
+            </g>
+          );
+        })}
         {chart.path ? <path className="power-chart-line" d={chart.path} fill="none" /> : null}
         {chart.regularDotsPath ? <path className="power-chart-dots" d={chart.regularDotsPath} /> : null}
         {chart.chargingDotsPath ? (
@@ -335,7 +367,15 @@ function PowerChartComponent({ readings, averageDailyUsage }: PowerChartProps) {
           }}
         >
           <div className="font-semibold tabular-nums">{activePoint.balance.toFixed(2)} 度</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{activePoint.label}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {activePoint.provider === "hwgl" ? "数据更新于 " : "查询于 "}{activePoint.label}
+          </div>
+          {activePoint.reportedDailyUsage && activePoint.reportedDailyUsage > 0 ? (
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              上游日用电 {activePoint.reportedDailyUsage.toFixed(2)} 度
+            </div>
+          ) : null}
+          {activePoint.powerStatus ? <div className="mt-1 text-[11px] text-muted-foreground">{activePoint.powerStatus}</div> : null}
           {activePoint.charging ? <div className="mt-1 text-[11px] text-success">余额上升，可能发生充值</div> : null}
         </div>
       ) : null}

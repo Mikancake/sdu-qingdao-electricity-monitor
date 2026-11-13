@@ -48,6 +48,30 @@ def verified_user(user: User = Depends(current_user)) -> User:
     return user
 
 
+def optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(db_session),
+) -> User | None:
+    """Resolve the signed-in user when a valid token is present, otherwise None.
+
+    Used by endpoints that serve slightly different content to signed-in users
+    without requiring a login.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+    payload = decode_access_token(credentials.credentials)
+    if payload is None or payload.get("kind", "user") != "user":
+        return None
+    try:
+        user_id = int(payload["sub"])
+    except (TypeError, ValueError):
+        return None
+    user = db.get(User, user_id)
+    if user is None or not token_matches_credentials(payload, user.password_hash):
+        return None
+    return user
+
+
 def current_admin(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(db_session),

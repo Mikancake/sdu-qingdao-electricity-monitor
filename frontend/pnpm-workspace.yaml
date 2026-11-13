@@ -1,2 +1,8 @@
+# The frontend is a single package, not a workspace.  pnpm requires the
+# ``packages`` field once this file exists, otherwise every ``pnpm install``
+# fails with "packages field missing or empty".
+packages:
+  - "."
+
 allowBuilds:
   esbuild: true

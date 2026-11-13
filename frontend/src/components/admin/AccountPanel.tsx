@@ -26,15 +26,17 @@ export function AccountPanel({
   }, [admin?.display_name]);
 
   return (
-    <div className="grid gap-5 xl:grid-cols-2">
-      <Card>
+    <section className="admin-page-section space-y-4" aria-labelledby="account-workspace-title">
+      <div className="border-b border-border pb-3"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">身份与安全</p><h2 id="account-workspace-title" className="mt-1 font-[family-name:var(--font-display)] text-xl tracking-tight">账户工作台</h2><p className="mt-1 text-sm text-muted-foreground">更新管理员资料或轮换登录凭据。</p></div>
+      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+      <Card className="border-border bg-panel shadow-sm">
         <CardHeader>
           <CardTitle>管理员资料</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
             <Label>用户名</Label>
-            <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">{admin?.username ?? "--"}</div>
+            <div className="rounded-md border border-border bg-muted/35 px-3 py-2 text-sm">{admin?.username ?? "--"}</div>
           </div>
           <div>
             <Label htmlFor="admin-display-name">显示名</Label>
@@ -47,7 +49,7 @@ export function AccountPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-sm">
         <CardHeader>
           <CardTitle>修改密码</CardTitle>
         </CardHeader>
@@ -84,6 +86,7 @@ export function AccountPanel({
           </Button>
         </CardContent>
       </Card>
-    </div>
+      </div>
+    </section>
   );
 }

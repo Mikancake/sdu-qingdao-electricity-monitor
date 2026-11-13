@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import Text, inspect, text
 from sqlalchemy.engine import Engine
 
@@ -115,6 +117,87 @@ def _ensure_sqlite_existing_columns(engine: Engine) -> None:
 
 
 def _ensure_existing_columns(engine: Engine) -> None:
+    _ensure_column(engine, "rooms", "provider", "ALTER TABLE rooms ADD COLUMN provider VARCHAR(20) DEFAULT 'mcard'")
+    _ensure_column(engine, "rooms", "provider_room_key", "ALTER TABLE rooms ADD COLUMN provider_room_key VARCHAR(80)")
+    _ensure_column(engine, "rooms", "provider_line_id", "ALTER TABLE rooms ADD COLUMN provider_line_id VARCHAR(40)")
+    _ensure_column(engine, "rooms", "provider_campus", "ALTER TABLE rooms ADD COLUMN provider_campus VARCHAR(120)")
+    _ensure_column(engine, "rooms", "provider_building", "ALTER TABLE rooms ADD COLUMN provider_building VARCHAR(120)")
+    _ensure_column(engine, "rooms", "provider_floor", "ALTER TABLE rooms ADD COLUMN provider_floor VARCHAR(40)")
+    _ensure_column(
+        engine,
+        "rooms",
+        "probe_only",
+        "ALTER TABLE rooms ADD COLUMN probe_only BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    _ensure_column(engine, "rooms", "provider_price", "ALTER TABLE rooms ADD COLUMN provider_price NUMERIC(10, 4)")
+    _ensure_column(
+        engine,
+        "rooms",
+        "provider_price_updated_at",
+        "ALTER TABLE rooms ADD COLUMN provider_price_updated_at TIMESTAMP",
+    )
+
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "provider",
+        "ALTER TABLE electricity_readings ADD COLUMN provider VARCHAR(20) DEFAULT 'mcard'",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "provider_updated_at",
+        "ALTER TABLE electricity_readings ADD COLUMN provider_updated_at TIMESTAMP",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "reported_daily_usage",
+        "ALTER TABLE electricity_readings ADD COLUMN reported_daily_usage NUMERIC(10, 4)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "reported_usage_date",
+        "ALTER TABLE electricity_readings ADD COLUMN reported_usage_date DATE",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "power_status",
+        "ALTER TABLE electricity_readings ADD COLUMN power_status VARCHAR(80)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "free_electricity",
+        "ALTER TABLE electricity_readings ADD COLUMN free_electricity NUMERIC(10, 4)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "paid_electricity",
+        "ALTER TABLE electricity_readings ADD COLUMN paid_electricity NUMERIC(10, 4)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "arrears_electricity",
+        "ALTER TABLE electricity_readings ADD COLUMN arrears_electricity NUMERIC(10, 4)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "electricity_price",
+        "ALTER TABLE electricity_readings ADD COLUMN electricity_price NUMERIC(10, 4)",
+    )
+    _ensure_column(
+        engine,
+        "electricity_readings",
+        "estimated_amount",
+        "ALTER TABLE electricity_readings ADD COLUMN estimated_amount NUMERIC(10, 2)",
+    )
+
     _ensure_column(engine, "auth_tokens", "health_status", "ALTER TABLE auth_tokens ADD COLUMN health_status VARCHAR(40) DEFAULT 'unknown'")
     _ensure_column(engine, "auth_tokens", "failure_count", "ALTER TABLE auth_tokens ADD COLUMN failure_count INTEGER DEFAULT 0")
     _ensure_column(engine, "auth_tokens", "last_checked_at", "ALTER TABLE auth_tokens ADD COLUMN last_checked_at TIMESTAMP")
@@ -141,6 +224,71 @@ def _ensure_existing_columns(engine: Engine) -> None:
 
 def _backfill_existing_data(engine: Engine) -> None:
     with engine.begin() as conn:
+        conn.execute(text("UPDATE rooms SET provider = 'mcard' WHERE provider IS NULL OR provider = ''"))
+        conn.execute(text("UPDATE rooms SET probe_only = FALSE WHERE probe_only IS NULL"))
+        conn.execute(
+            text("UPDATE electricity_readings SET provider = 'mcard' WHERE provider IS NULL OR provider = ''")
+        )
+        legacy_rooms = list(
+            conn.execute(
+                text(
+                    """
+                    SELECT id, room_number, building_key, provider_building
+                    FROM rooms
+                    WHERE building_key IN ('fenghuang_11', 'fenghuang_13', 'fenghuang_11_13')
+                       OR building_param IN (
+                           'hwgl&凤凰居11公寓',
+                           'hwgl&凤凰居13公寓',
+                           'hwgl&凤凰居11/13号楼',
+                           '1599193777&凤凰居11/13号楼'
+                       )
+                    """
+                )
+            ).mappings()
+        )
+        for room in legacy_rooms:
+            match = re.search(r"(\d{3})$", str(room["room_number"] or "").strip())
+            number = int(match.group(1)) if match else None
+            provider_building = str(room["provider_building"] or "").strip() or None
+            if provider_building not in {"凤凰居11公寓", "凤凰居13公寓"}:
+                provider_building = None
+            if provider_building is None and room["building_key"] == "fenghuang_11":
+                provider_building = "凤凰居11公寓"
+            elif provider_building is None and room["building_key"] == "fenghuang_13":
+                provider_building = "凤凰居13公寓"
+            elif provider_building is None and number is not None and (
+                108 <= number <= 119
+                or 201 <= number <= 219
+                or 301 <= number <= 319
+                or 401 <= number <= 419
+            ):
+                provider_building = "凤凰居11公寓"
+            elif provider_building is None and number is not None and (
+                220 <= number <= 242
+                or 320 <= number <= 344
+                or 420 <= number <= 445
+                or 501 <= number <= 523
+                or 601 <= number <= 618
+            ):
+                provider_building = "凤凰居13公寓"
+            conn.execute(
+                text(
+                    """
+                    UPDATE rooms
+                        SET provider = 'hwgl',
+                        building_key = 'fenghuang_11_13',
+                        building_name = '凤凰居11/13号楼',
+                        building_param = 'hwgl&凤凰居11/13号楼',
+                        provider_campus = '山东大学青岛校区',
+                        provider_building = :provider_building
+                    WHERE id = :room_id
+                    """
+                ),
+                {
+                    "room_id": room["id"],
+                    "provider_building": provider_building,
+                },
+            )
         conn.execute(text("UPDATE auth_tokens SET health_status = 'unknown' WHERE health_status IS NULL"))
         conn.execute(text("UPDATE auth_tokens SET failure_count = 0 WHERE failure_count IS NULL"))
         if engine.dialect.name == "sqlite":
@@ -204,6 +352,21 @@ def _ensure_secret_column_types(engine: Engine) -> None:
 def _ensure_performance_indexes(engine: Engine) -> None:
     indexes = {
         "ix_electricity_readings_room_read_at": ("electricity_readings", "room_id, read_at"),
+        "ix_electricity_readings_room_provider_updated": (
+            "electricity_readings",
+            "room_id, provider_updated_at",
+        ),
+        "ix_electricity_readings_room_reported_date": (
+            "electricity_readings",
+            "room_id, reported_usage_date",
+        ),
+        "ix_electricity_readings_provider": ("electricity_readings", "provider"),
+        "ix_rooms_provider": ("rooms", "provider"),
+        "ix_rooms_provider_room_key": ("rooms", "provider, provider_room_key"),
+        "ix_rooms_provider_probe_only": ("rooms", "provider, probe_only"),
+        "ix_electricity_recharges_room_paid_at": ("electricity_recharges", "room_id, paid_at"),
+        "ix_hwgl_probe_sessions_status_next_run": ("hwgl_probe_sessions", "status, next_run_at"),
+        "ix_hwgl_probe_samples_session_requested": ("hwgl_probe_samples", "session_id, requested_at"),
         "ix_notifications_binding_kind_status_created": (
             "notifications",
             "user_room_id, kind, status, created_at",

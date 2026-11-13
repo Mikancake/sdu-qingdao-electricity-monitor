@@ -15,9 +15,14 @@ const AdminApp = lazy(() => import("./components/AdminApp").then((module) => ({ 
 
 const TOKEN_KEY = "sdu-electricity-token";
 const THEME_KEY = "sdu-electricity-theme";
+const ACTIVE_VIEW_KEY = "sdu-electricity-active-view";
 
 function readStoredToken() {
   return window.localStorage.getItem(TOKEN_KEY);
+}
+function readStoredView(): ViewKey {
+  const value = window.localStorage.getItem(ACTIVE_VIEW_KEY);
+  return value === "rooms" || value === "records" || value === "settings" ? value : "dashboard";
 }
 
 function formatRetryAfter(seconds: number) {
@@ -94,7 +99,7 @@ function buildChartParams(range: ChartRangeState) {
 function UserApp() {
   const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(() => readStoredToken());
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+  const [activeView, setActiveView] = useState<ViewKey>(() => readStoredView());
   const [checkingId, setCheckingId] = useState<number | null>(null);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [selectedChartBindingId, setSelectedChartBindingId] = useState<number | null>(null);
@@ -109,6 +114,10 @@ function UserApp() {
     document.documentElement.classList.toggle("dark", darkMode);
     window.localStorage.setItem(THEME_KEY, darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTIVE_VIEW_KEY, activeView);
+  }, [activeView]);
 
   function handleLogin(nextToken: string) {
     window.localStorage.setItem(TOKEN_KEY, nextToken);
@@ -139,6 +148,12 @@ function UserApp() {
     queryKey: ["room-summaries"],
     queryFn: api.listRoomSummaries,
     enabled: Boolean(token)
+  });
+  const announcementsQuery = useQuery({
+    queryKey: ["announcements"],
+    queryFn: api.listAnnouncements,
+    enabled: Boolean(token),
+    staleTime: 60_000
   });
 
   const bindingsQuery = useQuery({
@@ -293,6 +308,13 @@ function UserApp() {
     void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
     void queryClient.invalidateQueries({ queryKey: ["chart-readings"] });
     void queryClient.invalidateQueries({ queryKey: ["runtime-limits"] });
+    void queryClient.invalidateQueries({ queryKey: ["announcements"] });
+  }
+
+  function logout() {
+    window.localStorage.removeItem(TOKEN_KEY);
+    setToken(null);
+    queryClient.clear();
   }
 
   function toggleBinding(binding: UserRoomBinding) {
@@ -320,8 +342,10 @@ function UserApp() {
       activeView={activeView}
       darkMode={darkMode}
       user={meQuery.data}
+      userLoading={meQuery.isLoading}
+      userError={Boolean(meQuery.error)}
       onChangeView={setActiveView}
-      onLogout={handleLogout}
+      onLogout={logout}
       onRefresh={refreshAll}
       onToggleTheme={() => setDarkMode((value) => !value)}
     >
@@ -330,6 +354,8 @@ function UserApp() {
       <Suspense fallback={<ViewLoading />}>
         {activeView === "dashboard" ? (
           <DashboardView
+            announcements={announcementsQuery.data ?? []}
+            announcementsStorageKey={`sdu-electricity-dismissed-announcements-${meQuery.data?.id ?? "anon"}`}
             summaries={summaries}
             selectedBindingId={selectedChartBindingId}
             chartReadings={chartReadingsQuery.data ?? []}
@@ -366,6 +392,8 @@ function UserApp() {
         {activeView === "settings" ? (
           <SettingsView
             user={meQuery.data}
+            userLoading={meQuery.isLoading}
+            userError={Boolean(meQuery.error)}
             bindings={bindings}
             loading={bindingsQuery.isLoading}
             updatingId={updatingId}

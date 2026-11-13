@@ -28,6 +28,10 @@ class RuntimeConfig:
     admin_audit_log_retention_days: int = settings.admin_audit_log_retention_days
     scheduled_job_run_retention_days: int = settings.scheduled_job_run_retention_days
     retention_cleanup_hour: int = settings.retention_cleanup_hour
+    hwgl_metadata_sync_interval_seconds: int = settings.hwgl_metadata_sync_interval_seconds
+    hwgl_metadata_history_days: int = settings.hwgl_metadata_history_days
+    hwgl_recharge_history_days: int = settings.hwgl_recharge_history_days
+    hwgl_probe_max_duration_seconds: int = settings.hwgl_probe_max_duration_seconds
 
 
 RUNTIME_DEFAULTS = RuntimeConfig()

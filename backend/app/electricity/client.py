@@ -1,6 +1,8 @@
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Protocol
 
 import requests
 
@@ -14,11 +16,33 @@ class ElectricityQueryResult:
     balance: Decimal | None = None
     error_kind: str | None = None
     error_msg: str | None = None
+    provider: str = "mcard"
+    provider_updated_at: datetime | None = None
+    reported_daily_usage: Decimal | None = None
+    reported_usage_date: date | None = None
+    power_status: str | None = None
+    free_electricity: Decimal | None = None
+    paid_electricity: Decimal | None = None
+    arrears_electricity: Decimal | None = None
+    electricity_price: Decimal | None = None
+    estimated_amount: Decimal | None = None
+    resolved_room_key: str | None = None
+    resolved_line_id: str | None = None
+    resolved_campus: str | None = None
+    resolved_building: str | None = None
+    resolved_floor: str | None = None
+
+
+class PostClient(Protocol):
+    def post(self, *args, **kwargs): ...
 
 
 class CampusElectricityClient:
-    def __init__(self, token_value: str):
+    provider = "mcard"
+
+    def __init__(self, token_value: str, *, http_client: PostClient | None = None):
         self.token_value = token_value
+        self.http_client = http_client or requests
 
     def query_room(self, room: Room) -> ElectricityQueryResult:
         headers = {
@@ -39,7 +63,7 @@ class CampusElectricityClient:
             "room": room.room_number,
         }
         try:
-            response = requests.post(
+            response = self.http_client.post(
                 settings.electricity_api_url,
                 headers=headers,
                 data=data,
@@ -67,7 +91,9 @@ class CampusElectricityClient:
             match = re.search(r"([\d.]+)\s*度", info_text)
             if not match:
                 return ElectricityQueryResult(False, error_kind="parse", error_msg=f"无法解析电量：{info_text}")
-            return ElectricityQueryResult(True, balance=Decimal(match.group(1)))
+            return ElectricityQueryResult(True, balance=Decimal(match.group(1)), provider=self.provider)
+        except requests.Timeout as exc:
+            return ElectricityQueryResult(False, error_kind="timeout", error_msg=f"{type(exc).__name__}: {exc}")
         except requests.RequestException as exc:
             return ElectricityQueryResult(False, error_kind="network", error_msg=f"{type(exc).__name__}: {exc}")
         except ValueError as exc:

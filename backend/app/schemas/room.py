@@ -23,6 +23,10 @@ class RoomOut(BaseModel):
     building_name: str
     building_param: str
     room_number: str
+    provider: str
+    provider_price: Decimal | None = None
+    provider_price_updated_at: datetime | None = None
+    probe_only: bool = False
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -41,3 +45,4 @@ class BuildingOut(BaseModel):
     key: str
     name: str
     param: str
+    provider: str

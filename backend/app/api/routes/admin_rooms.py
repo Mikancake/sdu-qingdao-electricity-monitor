@@ -1,18 +1,20 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
 from app.models.admin_user import AdminUser
 from app.models.electricity_reading import ElectricityReading
+from app.models.electricity_recharge import ElectricityRecharge
 from app.models.room import Room
 from app.models.user import User
 from app.models.user_room import UserRoom
 from app.schemas.admin import AdminRoomBindingOut, AdminRoomOut, AdminRoomPageOut
-from app.schemas.reading import ElectricityReadingOut
+from app.electricity.provider import HWGL_PROVIDER
+from app.schemas.reading import ElectricityReadingOut, ElectricityRechargeOut
 from app.services.usage import list_room_readings
 
 
@@ -24,7 +26,17 @@ def _admin_room_out(
     *,
     latest_balance: Decimal | None = None,
     latest_read_at: datetime | None = None,
+    latest_provider_updated_at: datetime | None = None,
+    latest_reported_daily_usage: Decimal | None = None,
+    latest_reported_usage_date: date | None = None,
+    latest_power_status: str | None = None,
+    latest_free_electricity: Decimal | None = None,
+    latest_paid_electricity: Decimal | None = None,
+    latest_arrears_electricity: Decimal | None = None,
+    latest_electricity_price: Decimal | None = None,
+    latest_estimated_amount: Decimal | None = None,
     reading_count: int = 0,
+    recent_recharges: list[ElectricityRecharge] | None = None,
 ) -> AdminRoomOut:
     bindings = sorted(room.user_rooms, key=lambda item: item.id)
     return AdminRoomOut(
@@ -44,7 +56,17 @@ def _admin_room_out(
         ],
         latest_balance=latest_balance,
         latest_read_at=latest_read_at,
+        latest_provider_updated_at=latest_provider_updated_at,
+        latest_reported_daily_usage=latest_reported_daily_usage,
+        latest_reported_usage_date=latest_reported_usage_date,
+        latest_power_status=latest_power_status,
+        latest_free_electricity=latest_free_electricity,
+        latest_paid_electricity=latest_paid_electricity,
+        latest_arrears_electricity=latest_arrears_electricity,
+        latest_electricity_price=latest_electricity_price,
+        latest_estimated_amount=latest_estimated_amount,
         reading_count=reading_count,
+        recent_recharges=list(recent_recharges or []),
     )
 
 
@@ -64,15 +86,32 @@ def _load_admin_rooms(db: Session, room_ids: list[int]) -> list[AdminRoomOut]:
             ElectricityReading.room_id.label("room_id"),
             ElectricityReading.balance.label("balance"),
             ElectricityReading.read_at.label("read_at"),
+            ElectricityReading.provider_updated_at.label("provider_updated_at"),
+            ElectricityReading.reported_daily_usage.label("reported_daily_usage"),
+            ElectricityReading.reported_usage_date.label("reported_usage_date"),
+            ElectricityReading.power_status.label("power_status"),
+            ElectricityReading.free_electricity.label("free_electricity"),
+            ElectricityReading.paid_electricity.label("paid_electricity"),
+            ElectricityReading.arrears_electricity.label("arrears_electricity"),
+            ElectricityReading.electricity_price.label("electricity_price"),
+            ElectricityReading.estimated_amount.label("estimated_amount"),
             func.count(ElectricityReading.id).over(partition_by=ElectricityReading.room_id).label("reading_count"),
             func.row_number()
             .over(
                 partition_by=ElectricityReading.room_id,
-                order_by=(ElectricityReading.read_at.desc(), ElectricityReading.id.desc()),
+                order_by=(
+                    func.coalesce(ElectricityReading.provider_updated_at, ElectricityReading.read_at).desc(),
+                    ElectricityReading.read_at.desc(),
+                    ElectricityReading.id.desc(),
+                ),
             )
             .label("position"),
         )
-        .where(ElectricityReading.room_id.in_(room_ids))
+        .join(Room, Room.id == ElectricityReading.room_id)
+        .where(
+            ElectricityReading.room_id.in_(room_ids),
+            ElectricityReading.provider == Room.provider,
+        )
         .subquery()
     )
     reading_rows = db.execute(
@@ -80,24 +119,84 @@ def _load_admin_rooms(db: Session, room_ids: list[int]) -> list[AdminRoomOut]:
             ranked_readings.c.room_id,
             ranked_readings.c.balance,
             ranked_readings.c.read_at,
+            ranked_readings.c.provider_updated_at,
+            ranked_readings.c.reported_daily_usage,
+            ranked_readings.c.reported_usage_date,
+            ranked_readings.c.power_status,
+            ranked_readings.c.free_electricity,
+            ranked_readings.c.paid_electricity,
+            ranked_readings.c.arrears_electricity,
+            ranked_readings.c.electricity_price,
+            ranked_readings.c.estimated_amount,
             ranked_readings.c.reading_count,
         ).where(ranked_readings.c.position == 1)
     )
     reading_by_room = {
-        int(row.room_id): (row.balance, row.read_at, int(row.reading_count or 0)) for row in reading_rows
+        int(row.room_id): (
+            row.balance,
+            row.read_at,
+            row.provider_updated_at,
+            row.reported_daily_usage,
+            row.reported_usage_date,
+            row.power_status,
+            row.free_electricity,
+            row.paid_electricity,
+            row.arrears_electricity,
+            row.electricity_price,
+            row.estimated_amount,
+            int(row.reading_count or 0),
+        )
+        for row in reading_rows
     }
+    recharge_by_room: dict[int, list[ElectricityRecharge]] = {}
+    if room_ids and inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+        recharge_rows = db.scalars(
+            select(ElectricityRecharge)
+            .where(
+                ElectricityRecharge.room_id.in_(room_ids),
+                ElectricityRecharge.provider == HWGL_PROVIDER,
+            )
+            .order_by(ElectricityRecharge.paid_at.desc(), ElectricityRecharge.id.desc())
+        )
+        for recharge in recharge_rows:
+            bucket = recharge_by_room.setdefault(recharge.room_id, [])
+            if len(bucket) < 8:
+                bucket.append(recharge)
     items: list[AdminRoomOut] = []
     for room_id in room_ids:
         room = by_id.get(room_id)
         if room is None:
             continue
-        latest_balance, latest_read_at, reading_count = reading_by_room.get(room_id, (None, None, 0))
+        (
+            latest_balance,
+            latest_read_at,
+            latest_provider_updated_at,
+            latest_reported_daily_usage,
+            latest_reported_usage_date,
+            latest_power_status,
+            latest_free_electricity,
+            latest_paid_electricity,
+            latest_arrears_electricity,
+            latest_electricity_price,
+            latest_estimated_amount,
+            reading_count,
+        ) = reading_by_room.get(room_id, (None, None, None, None, None, None, None, None, None, None, None, 0))
         items.append(
             _admin_room_out(
                 room,
                 latest_balance=latest_balance,
                 latest_read_at=latest_read_at,
+                latest_provider_updated_at=latest_provider_updated_at,
+                latest_reported_daily_usage=latest_reported_daily_usage,
+                latest_reported_usage_date=latest_reported_usage_date,
+                latest_power_status=latest_power_status,
+                latest_free_electricity=latest_free_electricity,
+                latest_paid_electricity=latest_paid_electricity,
+                latest_arrears_electricity=latest_arrears_electricity,
+                latest_electricity_price=latest_electricity_price,
+                latest_estimated_amount=latest_estimated_amount,
                 reading_count=reading_count,
+                recent_recharges=recharge_by_room.get(room_id),
             )
         )
     return items
@@ -153,7 +252,10 @@ def list_admin_rooms_page(
     newest_binding = func.max(UserRoom.created_at)
     latest_balance = (
         select(ElectricityReading.balance)
-        .where(ElectricityReading.room_id == Room.id)
+        .where(
+            ElectricityReading.room_id == Room.id,
+            ElectricityReading.provider == Room.provider,
+        )
         .order_by(ElectricityReading.read_at.desc(), ElectricityReading.id.desc())
         .limit(1)
         .correlate(Room)
@@ -198,15 +300,49 @@ def list_admin_room_readings(
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> list[ElectricityReading]:
-    if db.get(Room, room_id) is None:
+    room = db.get(Room, room_id)
+    if room is None:
         raise HTTPException(status_code=404, detail="room not found")
     effective_days = None if start_at or end_at else days
     return list_room_readings(
         db,
         room_id,
+        provider=room.provider,
         days=effective_days,
         start_at=start_at,
         end_at=end_at,
         limit=limit,
         ascending=True,
     )
+
+
+@router.get("/rooms/{room_id}/recharges", response_model=list[ElectricityRechargeOut])
+def list_admin_room_recharges(
+    room_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    days: int | None = Query(default=None, ge=1, le=730),
+    _: AdminUser = Depends(current_admin),
+    db: Session = Depends(db_session),
+) -> list[ElectricityRecharge]:
+    room = db.get(Room, room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    if room.provider != HWGL_PROVIDER:
+        return []
+    if not inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+        return []
+    stmt = (
+        select(ElectricityRecharge)
+        .where(
+            ElectricityRecharge.room_id == room_id,
+            ElectricityRecharge.provider == HWGL_PROVIDER,
+        )
+        .order_by(ElectricityRecharge.paid_at.desc(), ElectricityRecharge.id.desc())
+        .limit(limit)
+    )
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        stmt = stmt.where(
+            (ElectricityRecharge.paid_at.is_(None)) | (ElectricityRecharge.paid_at >= cutoff)
+        )
+    return list(db.scalars(stmt))

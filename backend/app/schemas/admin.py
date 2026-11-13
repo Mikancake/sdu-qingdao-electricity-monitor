@@ -1,9 +1,11 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.binding import UserRoomOut
+from app.schemas.reading import ElectricityRechargeOut
 from app.schemas.room import RoomOut
 
 
@@ -180,6 +182,10 @@ class RuntimeSettingsOut(BaseModel):
     admin_audit_log_retention_days: int
     scheduled_job_run_retention_days: int
     retention_cleanup_hour: int
+    hwgl_metadata_sync_interval_seconds: int
+    hwgl_metadata_history_days: int
+    hwgl_recharge_history_days: int
+    hwgl_probe_max_duration_seconds: int
 
 
 class RuntimeSettingsUpdate(BaseModel):
@@ -201,6 +207,10 @@ class RuntimeSettingsUpdate(BaseModel):
     admin_audit_log_retention_days: int | None = Field(default=None, ge=0, le=3650)
     scheduled_job_run_retention_days: int | None = Field(default=None, ge=0, le=3650)
     retention_cleanup_hour: int | None = Field(default=None, ge=0, le=23)
+    hwgl_metadata_sync_interval_seconds: int | None = Field(default=None, ge=60, le=7 * 24 * 60 * 60)
+    hwgl_metadata_history_days: int | None = Field(default=None, ge=1, le=365)
+    hwgl_recharge_history_days: int | None = Field(default=None, ge=1, le=730)
+    hwgl_probe_max_duration_seconds: int | None = Field(default=None, ge=60, le=24 * 60 * 60)
 
 
 class DataRetentionCleanupOut(BaseModel):
@@ -211,6 +221,9 @@ class DataRetentionCleanupOut(BaseModel):
     electricity_readings_deleted: int
     admin_audit_logs_deleted: int
     scheduled_job_runs_deleted: int
+    electricity_recharges_deleted: int = 0
+    hwgl_probe_samples_deleted: int = 0
+    hwgl_probe_sessions_deleted: int = 0
     total_deleted: int
 
 
@@ -330,7 +343,17 @@ class AdminRoomOut(BaseModel):
     bindings: list[AdminRoomBindingOut]
     latest_balance: Decimal | None
     latest_read_at: datetime | None
+    latest_provider_updated_at: datetime | None = None
+    latest_reported_daily_usage: Decimal | None = None
+    latest_reported_usage_date: date | None = None
+    latest_power_status: str | None = None
+    latest_free_electricity: Decimal | None = None
+    latest_paid_electricity: Decimal | None = None
+    latest_arrears_electricity: Decimal | None = None
+    latest_electricity_price: Decimal | None = None
+    latest_estimated_amount: Decimal | None = None
     reading_count: int
+    recent_recharges: list[ElectricityRechargeOut] = Field(default_factory=list)
 
 
 class AdminRoomPageOut(BaseModel):
@@ -351,3 +374,54 @@ class AdminAuditLogOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class HwglProbeStartRequest(BaseModel):
+    # Existing rooms are selected by id.  A custom probe target can instead
+    # provide a room number; the API resolves it against the HWGL public
+    # directory before creating an isolated probe-only room record.
+    room_id: int | None = Field(default=None, gt=0)
+    room_number: str | None = Field(default=None, min_length=1, max_length=40)
+    building_side: Literal["auto", "11", "13"] = "auto"
+    interval_seconds: int = Field(default=60, ge=60, le=60 * 60)
+    duration_seconds: int = Field(default=3600, ge=60, le=24 * 60 * 60)
+
+
+class HwglProbeSampleOut(BaseModel):
+    id: int
+    session_id: int
+    room_id: int
+    requested_at: datetime
+    received_at: datetime
+    provider_updated_at: datetime | None
+    balance: Decimal | None
+    reported_daily_usage: Decimal | None
+    power_status: str | None
+    latency_ms: int | None
+    http_status: int | None
+    success: bool
+    error_kind: str | None
+    error_msg: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HwglProbeSessionOut(BaseModel):
+    id: int
+    room_id: int
+    interval_seconds: int
+    duration_seconds: int
+    status: str
+    started_at: datetime
+    next_run_at: datetime
+    finished_at: datetime | None
+    sample_count: int
+    unique_snapshot_count: int
+    summary: dict[str, object] | None = None
+    room: RoomOut
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HwglProbeDetailOut(HwglProbeSessionOut):
+    samples: list[HwglProbeSampleOut] = Field(default_factory=list)

@@ -1,3 +1,16 @@
+export type AnnouncementVisibility = "public" | "users";
+
+export interface Announcement {
+  id: number;
+  title: string;
+  content: string;
+  is_published: boolean;
+  visibility: AnnouncementVisibility;
+  created_at: string;
+  updated_at?: string | null;
+  published_at?: string | null;
+}
+
 export interface User {
   id: number;
   email: string;
@@ -29,6 +42,7 @@ export interface Building {
   key: string;
   name: string;
   param: string;
+  provider: "mcard" | "hwgl" | string;
 }
 
 export interface Room {
@@ -39,6 +53,10 @@ export interface Room {
   building_name: string;
   building_param: string;
   room_number: string;
+  provider: "mcard" | "hwgl" | string;
+  provider_price?: string | null;
+  provider_price_updated_at?: string | null;
+  probe_only?: boolean;
   created_at: string;
 }
 
@@ -47,6 +65,16 @@ export interface Reading {
   room_id?: number;
   balance: string;
   source?: string;
+  provider?: "mcard" | "hwgl" | string;
+  provider_updated_at?: string | null;
+  reported_daily_usage?: string | null;
+  reported_usage_date?: string | null;
+  power_status?: string | null;
+  free_electricity?: string | null;
+  paid_electricity?: string | null;
+  arrears_electricity?: string | null;
+  electricity_price?: string | null;
+  estimated_amount?: string | null;
   read_at: string;
 }
 
@@ -73,15 +101,58 @@ export interface CheckAttempt {
 export interface UsageStats {
   latest_balance?: string | null;
   latest_read_at?: string | null;
+  latest_provider_updated_at?: string | null;
+  latest_power_status?: string | null;
   average_daily_usage?: string | null;
-  average_daily_usage_source?: "measured" | "insufficient" | "unknown" | string;
+  average_daily_usage_source?:
+    | "provider_reported"
+    | "provider_reported_historical"
+    | "measured"
+    | "measured_historical"
+    | "inactive"
+    | "insufficient"
+    | "unknown"
+    | string;
   usage_window_hours?: string | null;
   days_remaining?: string | null;
-  days_remaining_source?: "measured" | "default" | "unknown" | string;
+  days_remaining_source?:
+    | "provider_reported"
+    | "provider_reported_historical"
+    | "measured"
+    | "measured_historical"
+    | "default"
+    | "unknown"
+    | string;
   alert_threshold?: string | null;
-  alert_threshold_source?: "fixed" | "measured" | "default" | "unknown" | string;
+  alert_threshold_source?:
+    | "fixed"
+    | "provider_reported"
+    | "provider_reported_historical"
+    | "measured"
+    | "measured_historical"
+    | "default"
+    | "unknown"
+    | string;
   is_low_power: boolean;
   status: "unknown" | "low" | "ok" | string;
+  estimated_daily_usage?: string | null;
+  estimated_daily_usage_source?:
+    | "provider_reported"
+    | "provider_reported_historical"
+    | "measured"
+    | "measured_historical"
+    | "default"
+    | "unknown"
+    | string;
+  average_daily_usage_sample_days?: number;
+  average_daily_usage_basis?: string;
+  active_period_start?: string | null;
+  active_period_end?: string | null;
+  free_electricity?: string | null;
+  paid_electricity?: string | null;
+  arrears_electricity?: string | null;
+  electricity_price?: string | null;
+  estimated_amount?: string | null;
 }
 
 export interface UserRoomSummary {
@@ -94,6 +165,21 @@ export interface UserRoomSummary {
   manual_check_available_at?: string | null;
   usage: UsageStats;
   recent_readings: Reading[];
+  recent_recharges?: ElectricityRecharge[];
+}
+
+export interface ElectricityRecharge {
+  id: number;
+  room_id: number;
+  provider: string;
+  external_id_tail?: string | null;
+  paid_at?: string | null;
+  amount?: string | null;
+  line_type?: string | null;
+  payment_status?: string | null;
+  processing_status?: string | null;
+  source: string;
+  fetched_at: string;
 }
 
 export interface UserRoomBinding {
@@ -240,6 +326,10 @@ export interface RuntimeSettings {
   admin_audit_log_retention_days: number;
   scheduled_job_run_retention_days: number;
   retention_cleanup_hour: number;
+  hwgl_metadata_sync_interval_seconds: number;
+  hwgl_metadata_history_days: number;
+  hwgl_recharge_history_days: number;
+  hwgl_probe_max_duration_seconds: number;
   appearance?: AppearanceSettings | null;
 }
 
@@ -251,6 +341,9 @@ export interface DataRetentionCleanupResult {
   electricity_readings_deleted: number;
   admin_audit_logs_deleted: number;
   scheduled_job_runs_deleted: number;
+  electricity_recharges_deleted?: number;
+  hwgl_probe_samples_deleted?: number;
+  hwgl_probe_sessions_deleted?: number;
   total_deleted: number;
 }
 
@@ -357,7 +450,17 @@ export interface AdminRoom {
   bindings: AdminRoomBinding[];
   latest_balance?: string | null;
   latest_read_at?: string | null;
+  latest_provider_updated_at?: string | null;
+  latest_reported_daily_usage?: string | null;
+  latest_reported_usage_date?: string | null;
+  latest_power_status?: string | null;
+  latest_free_electricity?: string | null;
+  latest_paid_electricity?: string | null;
+  latest_arrears_electricity?: string | null;
+  latest_electricity_price?: string | null;
+  latest_estimated_amount?: string | null;
   reading_count: number;
+  recent_recharges: ElectricityRecharge[];
 }
 
 export interface AdminRoomPage {
@@ -377,4 +480,48 @@ export interface AdminAuditLog {
   target_id?: string | null;
   detail?: string | null;
   created_at: string;
+}
+
+export interface AdminHwglProbeSample {
+  id: number;
+  session_id: number;
+  room_id: number;
+  requested_at: string;
+  received_at: string;
+  provider_updated_at?: string | null;
+  balance?: string | null;
+  reported_daily_usage?: string | null;
+  power_status?: string | null;
+  latency_ms?: number | null;
+  http_status?: number | null;
+  success: boolean;
+  error_kind?: string | null;
+  error_msg?: string | null;
+}
+
+export interface AdminHwglProbe {
+  id: number;
+  room_id: number;
+  interval_seconds: number;
+  duration_seconds: number;
+  status: "running" | "finished" | "stopped" | "failed" | string;
+  started_at: string;
+  next_run_at: string;
+  finished_at?: string | null;
+  sample_count: number;
+  unique_snapshot_count: number;
+  summary?: Record<string, unknown> | null;
+  room: Room;
+}
+
+export interface AdminHwglProbeStartPayload {
+  room_id?: number;
+  room_number?: string;
+  building_side?: "auto" | "11" | "13";
+  interval_seconds: number;
+  duration_seconds: number;
+}
+
+export interface AdminHwglProbeDetail extends AdminHwglProbe {
+  samples: AdminHwglProbeSample[];
 }

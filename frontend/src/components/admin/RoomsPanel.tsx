@@ -55,7 +55,7 @@ export function AdminRoomsPanel({
   }, [selectedRoomId, visibleRooms]);
 
   return (
-    <Card>
+    <Card className="border-border bg-panel shadow-none">
       <CardHeader>
         <CardTitle>宿舍列表</CardTitle>
         <p className="mt-1 text-xs text-muted-foreground">按当前绑定关系统计宿舍，删除绑定后这里会同步减少。</p>
@@ -122,7 +122,9 @@ export function AdminRoomsPanel({
                       </td>
                       <td data-label="当前电量" className="whitespace-nowrap px-4 py-3">
                         <div className="font-medium tabular-nums">{formatKwh(item.latest_balance)}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.latest_read_at)}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {formatDateTime(item.latest_provider_updated_at ?? item.latest_read_at)}
+                      </div>
                         <div className="mt-1 text-[11px] text-muted-foreground">{item.reading_count ?? 0} 条读数</div>
                       </td>
                       <td data-label="绑定详情" className="min-w-[280px] px-4 py-3">

@@ -1,15 +1,15 @@
 import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BatteryCharging, Bell, KeyRound, Loader2, Mail, Play, RotateCcw, ShieldCheck, SlidersHorizontal } from "lucide-react";
 
 import { createApiClient } from "../../lib/api";
 import { formatDateTime } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { Card, CardContent } from "../ui/card";
 import { ActivityChart, HealthOverview } from "./StatusCharts";
 import { BuildingStatsChart, CheckTrendChart, EmailTrendChart, UserGrowthChart } from "./DashboardCharts";
-import { ADMIN_TOKEN_KEY } from "./utils";
+import { ADMIN_TOKEN_KEY, describeError } from "./utils";
 
 type DashboardChartKey = "activity" | "checks" | "emails" | "users" | "buildings" | "health";
 
@@ -48,19 +48,16 @@ interface DashboardStat {
 
 const DashboardStatCard = memo(function DashboardStatCard({ item, index }: { item: DashboardStat; index: number }) {
   return (
-    <Card
-      className="admin-dashboard-card admin-stat-card admin-dashboard-enter"
-      style={{ "--admin-dashboard-delay": `${index * 34}ms` } as CSSProperties}
-    >
-      <CardContent className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-xs text-muted-foreground">{item.label}</div>
-          <div className="mt-2 text-2xl font-semibold tabular-nums">
-            <span key={String(item.value)} className="admin-stat-value">{item.value}</span>
-          </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">{item.detail}</div>
+    <Card className={`min-w-0 ${index === 0 ? "border-primary/30 bg-primary/5 sm:col-span-2" : ""}`}>
+      <CardContent className="flex h-full flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
+          <span aria-hidden="true" className="shrink-0">{item.icon}</span>
         </div>
-        <div className="admin-stat-icon">{item.icon}</div>
+        <div className="min-w-0">
+          <div className="metric-value break-words">{item.value}</div>
+          <div className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -143,23 +140,49 @@ export function StatusPanel({
   ], [status]);
 
   return (
-    <div className="admin-dashboard grid gap-5">
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid min-w-0 gap-6">
+      <section aria-label="运行调度" className="grid min-w-0 gap-0 overflow-hidden rounded-lg border border-border bg-panel xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
+        <div className="feature-panel p-5 sm:p-6">
+          <div className="eyebrow">监测快照</div>
+          <h2 className="mt-3 font-serif text-2xl leading-snug">校园用电，尽在掌握。</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">查询凭据、宿舍读数与通知投递的统一运行记录。</p>
+          <div className="mt-6 flex flex-wrap items-baseline gap-x-4 gap-y-2 border-t border-border pt-4">
+            <span className="text-xs text-muted-foreground">最近一次电量读数</span>
+            <span className="text-sm font-medium tabular-nums">{formatDateTime(status?.latest_read_at)}</span>
+          </div>
+        </div>
+        <div className="grid content-center gap-4 border-t border-border p-5 sm:p-6 xl:border-l xl:border-t-0">
+          <div><h3 className="text-sm font-semibold">手动调度</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">需要即时更新？按需运行到期检查或通知扫描。</p></div>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={runningChecks} aria-busy={runningChecks} onClick={onRunChecks}>
+              {runningChecks ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+              立即检查到期宿舍
+            </Button>
+            <Button disabled={runningNotifications} aria-busy={runningNotifications} onClick={onRunNotifications} variant="secondary">
+              {runningNotifications ? <Loader2 className="animate-spin" size={16} /> : <Bell size={16} />}
+              立即扫描提醒
+            </Button>
+          </div>
+        </div>
+      </section>
+      {statusQuery.isLoading ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin" />正在汇总平台运行数据…</div> : null}
+      {statusQuery.isError ? <div role="alert" className="rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-danger">{describeError(statusQuery.error)}</div> : null}
+      <section aria-label="平台关键指标" className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((item, index) => (
           <DashboardStatCard key={item.key} index={index} item={item} />
         ))}
       </section>
 
-      <Card className="admin-dashboard-card admin-dashboard-controls admin-dashboard-enter" style={{ "--admin-dashboard-delay": "210ms" } as CSSProperties}>
-        <CardContent className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="admin-stat-icon h-10 w-10 rounded-xl"><SlidersHorizontal size={18} /></div>
-            <div className="text-sm font-semibold">看板内容</div>
+      <Card>
+        <CardContent className="grid gap-5 lg:grid-cols-[200px_minmax(0,1fr)]">
+          <div className="flex items-start gap-3">
+            <SlidersHorizontal size={18} className="mt-0.5 shrink-0 text-primary" />
+            <div><h2 className="text-sm font-semibold">趋势与健康度</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">勾选图表，定制当前视图。</p></div>
           </div>
-          <div className="admin-chart-toggle-group flex flex-wrap items-center gap-2" role="group" aria-label="图表显示选项">
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="图表显示选项">
             {chartOptions.map((item) => (
-              <label key={item.key} className="admin-chart-toggle">
-                <input checked={visibleCharts[item.key]} type="checkbox" onChange={() => toggleChart(item.key)} />
+              <label key={item.key} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors ${visibleCharts[item.key] ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-panel text-muted-foreground"}`}>
+                <input className="h-3.5 w-3.5 accent-primary" checked={visibleCharts[item.key]} type="checkbox" onChange={() => toggleChart(item.key)} />
                 <span>{item.label}</span>
               </label>
             ))}
@@ -171,29 +194,29 @@ export function StatusPanel({
         </CardContent>
       </Card>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid min-w-0 gap-4 xl:grid-cols-2">
         {renderedCharts.activity ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter xl:col-span-2" style={{ "--admin-dashboard-delay": "250ms" } as CSSProperties}>
+          <Card className="min-w-0 xl:col-span-2">
             <CardContent><ActivityChart points={status?.activity_series ?? []} /></CardContent>
           </Card>
         ) : null}
         {renderedCharts.checks ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter" style={{ "--admin-dashboard-delay": "285ms" } as CSSProperties}>
+          <Card className="min-w-0">
             <CardContent><CheckTrendChart points={status?.activity_series ?? []} /></CardContent>
           </Card>
         ) : null}
         {renderedCharts.emails ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter" style={{ "--admin-dashboard-delay": "320ms" } as CSSProperties}>
+          <Card className="min-w-0">
             <CardContent><EmailTrendChart points={status?.activity_series ?? []} /></CardContent>
           </Card>
         ) : null}
         {renderedCharts.users ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter" style={{ "--admin-dashboard-delay": "355ms" } as CSSProperties}>
+          <Card className="min-w-0">
             <CardContent><UserGrowthChart points={status?.activity_series ?? []} totalUsers={status?.total_users ?? 0} /></CardContent>
           </Card>
         ) : null}
         {renderedCharts.health ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter" style={{ "--admin-dashboard-delay": "390ms" } as CSSProperties}>
+          <Card className="min-w-0">
             <CardContent>
               <HealthOverview
                 enabledSmtp={status?.enabled_smtp_count ?? 0}
@@ -209,30 +232,12 @@ export function StatusPanel({
           </Card>
         ) : null}
         {renderedCharts.buildings ? (
-          <Card className="admin-dashboard-card admin-dashboard-chart-card admin-dashboard-enter xl:col-span-2" style={{ "--admin-dashboard-delay": "425ms" } as CSSProperties}>
+          <Card className="min-w-0 xl:col-span-2">
             <CardContent><BuildingStatsChart buildings={status?.building_stats ?? []} /></CardContent>
           </Card>
         ) : null}
       </section>
 
-      <Card className="admin-dashboard-card admin-dashboard-enter" style={{ "--admin-dashboard-delay": "460ms" } as CSSProperties}>
-        <CardHeader>
-          <CardTitle>运行控制</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <Button disabled={runningChecks} onClick={onRunChecks} variant="secondary">
-            {runningChecks ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
-            立即检查到期宿舍
-          </Button>
-          <Button disabled={runningNotifications} onClick={onRunNotifications} variant="secondary">
-            {runningNotifications ? <Loader2 className="animate-spin" size={16} /> : <Bell size={16} />}
-            立即扫描提醒
-          </Button>
-          <div className="flex items-center text-sm text-muted-foreground">
-            最新读数：{formatDateTime(status?.latest_read_at)}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

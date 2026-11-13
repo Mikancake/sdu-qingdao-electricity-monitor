@@ -35,13 +35,13 @@ def create_room(payload: RoomCreate, db: Session = Depends(db_session)) -> Room:
 
 @router.get("", response_model=list[RoomOut])
 def list_rooms(db: Session = Depends(db_session)) -> list[Room]:
-    return list(db.scalars(select(Room).order_by(Room.id)))
+    return list(db.scalars(select(Room).where(Room.probe_only.is_(False)).order_by(Room.id)))
 
 
 @router.post("/{room_id}/check", response_model=ElectricityReadingOut)
 def check_room(room_id: int, db: Session = Depends(db_session)) -> ElectricityReading:
     room = db.get(Room, room_id)
-    if room is None:
+    if room is None or room.probe_only:
         raise HTTPException(status_code=404, detail="room not found")
 
     outcome = check_and_store_room(db, room, source="manual")
@@ -60,12 +60,21 @@ def get_room_summary(
     db: Session = Depends(db_session),
 ) -> RoomSummaryOut:
     room = db.get(Room, room_id)
-    if room is None:
+    if room is None or room.probe_only:
         raise HTTPException(status_code=404, detail="room not found")
 
-    readings = list_room_readings(db, room_id, limit=limit, ascending=False)
+    readings = list_room_readings(
+        db,
+        room_id,
+        provider=room.provider,
+        limit=limit,
+        ascending=False,
+    )
     reading_count = db.scalar(
-        select(func.count(ElectricityReading.id)).where(ElectricityReading.room_id == room_id)
+        select(func.count(ElectricityReading.id)).where(
+            ElectricityReading.room_id == room_id,
+            ElectricityReading.provider == room.provider,
+        )
     )
     latest = readings[0] if readings else None
     return RoomSummaryOut(
@@ -86,7 +95,14 @@ def list_readings(
     db: Session = Depends(db_session),
 ) -> list[ElectricityReading]:
     room = db.get(Room, room_id)
-    if room is None:
+    if room is None or room.probe_only:
         raise HTTPException(status_code=404, detail="room not found")
 
-    return list_room_readings(db, room_id, days=days, limit=limit, ascending=False)
+    return list_room_readings(
+        db,
+        room_id,
+        provider=room.provider,
+        days=days,
+        limit=limit,
+        ascending=False,
+    )

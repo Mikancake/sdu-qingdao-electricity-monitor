@@ -5,7 +5,7 @@ import type { User, UserRoomBinding } from "../lib/types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { Input, Label } from "./ui/input";
+import { Input, Label, Select } from "./ui/input";
 
 type BindingUpdatePayload = {
   alert_days?: number;
@@ -24,6 +24,8 @@ type UserPreferencesPayload = {
 
 interface SettingsViewProps {
   user?: User;
+  userLoading: boolean;
+  userError: boolean;
   bindings: UserRoomBinding[];
   loading: boolean;
   updatingId?: number | null;
@@ -125,8 +127,8 @@ function BindingAlertForm({
   }
 
   return (
-    <div className="border-t border-border px-5 py-4 first:border-t-0">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+    <div className="rounded-xl border border-border p-4 sm:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="font-medium">
@@ -134,7 +136,7 @@ function BindingAlertForm({
             </div>
             <Badge tone={enabled ? "success" : "muted"}>{enabled ? "提醒开启" : "提醒关闭"}</Badge>
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">可以按可用天数、1 天用电量或固定电量提醒，也可以单独覆盖邮件间隔和立即同步冷却。</div>
+          <div className="mt-2 max-w-xl text-xs leading-5 text-muted-foreground">独立设置这个宿舍的提醒方式与发送频率，留空的覆盖项将继承默认设置。</div>
         </div>
 
         <label className="inline-flex select-none items-center gap-2 text-sm text-muted-foreground">
@@ -148,19 +150,18 @@ function BindingAlertForm({
         </label>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto] xl:items-start">
+      <div className="mt-5 grid gap-x-5 gap-y-4 border-t border-border pt-5 md:grid-cols-2">
         <div>
           <Label htmlFor={`threshold-mode-${binding.id}`}>提醒方式</Label>
-          <select
+          <Select
             id={`threshold-mode-${binding.id}`}
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
             value={thresholdMode}
             onChange={(event) => setThresholdMode(event.target.value as "days" | "average" | "fixed")}
           >
             <option value="days">按可用天数提醒</option>
             <option value="average">低于 1 天用电量提醒</option>
             <option value="fixed">按固定电量提醒</option>
-          </select>
+          </Select>
         </div>
         {thresholdMode === "days" ? (
           <div>
@@ -235,7 +236,7 @@ function BindingAlertForm({
           </div>
         </div>
         <Button
-          className="xl:mt-6 xl:w-[104px]"
+          className="justify-self-start md:col-span-2"
           disabled={saving || cooldownHasError || notifyCooldownHasError}
           onClick={save}
           variant="secondary"
@@ -250,6 +251,8 @@ function BindingAlertForm({
 
 export function SettingsView({
   user,
+  userLoading,
+  userError,
   bindings,
   loading,
   updatingId,
@@ -270,11 +273,13 @@ export function SettingsView({
   onRequestNotificationEmail,
   onVerifyNotificationEmail
 }: SettingsViewProps) {
-  const [notificationEmail, setNotificationEmail] = useState(user?.notification_email || user?.email || "");
+  const [notificationEmail, setNotificationEmail] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
-  const [userNotifyCooldown, setUserNotifyCooldown] = useState(user?.notify_cooldown_hours?.toString() ?? "");
-  const [dailyReportEnabled, setDailyReportEnabled] = useState(user?.daily_report_enabled ?? true);
-  const [dailyReportIntervalDays, setDailyReportIntervalDays] = useState(String(user?.daily_report_interval_days ?? 1));
+  const [userNotifyCooldown, setUserNotifyCooldown] = useState("");
+  const [dailyReportEnabled, setDailyReportEnabled] = useState(true);
+  const [dailyReportIntervalDays, setDailyReportIntervalDays] = useState("1");
+  const [notificationEmailDirty, setNotificationEmailDirty] = useState(false);
+  const [preferencesDirty, setPreferencesDirty] = useState(false);
   const [userNotifyCooldownTouched, setUserNotifyCooldownTouched] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -282,15 +287,51 @@ export function SettingsView({
   const [deletePassword, setDeletePassword] = useState("");
 
   useEffect(() => {
-    setNotificationEmail(user?.notification_email || user?.email || "");
-  }, [user?.email, user?.notification_email]);
+    if (!user || userLoading) {
+      return;
+    }
+    const serverEmail = user.notification_email || user.email || "";
+    if (notificationEmailDirty) {
+      if (notificationEmail === serverEmail) {
+        setNotificationEmailDirty(false);
+      }
+      return;
+    }
+    setNotificationEmail(serverEmail);
+  }, [notificationEmail, notificationEmailDirty, user?.email, user?.id, user?.notification_email, userLoading]);
 
   useEffect(() => {
-    setUserNotifyCooldown(user?.notify_cooldown_hours?.toString() ?? "");
-    setDailyReportEnabled(user?.daily_report_enabled ?? true);
-    setDailyReportIntervalDays(String(user?.daily_report_interval_days ?? 1));
+    if (!user || userLoading) {
+      return;
+    }
+    const serverNotifyCooldown = user.notify_cooldown_hours?.toString() ?? "";
+    const serverDailyReportEnabled = user.daily_report_enabled;
+    const serverDailyReportIntervalDays = String(user.daily_report_interval_days);
+    if (preferencesDirty) {
+      if (
+        userNotifyCooldown === serverNotifyCooldown &&
+        dailyReportEnabled === serverDailyReportEnabled &&
+        dailyReportIntervalDays === serverDailyReportIntervalDays
+      ) {
+        setPreferencesDirty(false);
+      }
+      return;
+    }
+    setUserNotifyCooldown(serverNotifyCooldown);
+    setDailyReportEnabled(serverDailyReportEnabled);
+    setDailyReportIntervalDays(serverDailyReportIntervalDays);
     setUserNotifyCooldownTouched(false);
-  }, [user?.daily_report_enabled, user?.daily_report_interval_days, user?.notify_cooldown_hours]);
+  }, [
+    dailyReportEnabled,
+    dailyReportIntervalDays,
+    preferencesDirty,
+    user?.daily_report_enabled,
+    user?.daily_report_interval_days,
+    user?.id,
+    user?.notify_cooldown_hours,
+    userLoading,
+    userNotifyCooldown
+  ]);
 
   const userNotifyCooldownValue = userNotifyCooldown.trim() ? Number(userNotifyCooldown) : null;
   const userNotifyCooldownInvalid =
@@ -305,39 +346,67 @@ export function SettingsView({
   const userNotifyCooldownHasError = userNotifyCooldownInvalid || userNotifyCooldownTooLow;
   const dailyReportIntervalNumber = Number(dailyReportIntervalDays);
   const dailyReportIntervalInvalid = !Number.isFinite(dailyReportIntervalNumber) || dailyReportIntervalNumber < 1;
+  const accountEmail = user?.email ?? (userLoading ? "正在读取账号信息" : userError ? "账号信息加载失败" : "未获取到账号");
+  const notificationEmailLabel = user
+    ? user.notification_email || user.email || "--"
+    : userLoading
+      ? "正在读取账号信息"
+      : userError
+        ? "无法读取"
+        : "--";
+  const notificationEmailVerified = Boolean(user) && Boolean(user?.notification_email_verified || !user?.notification_email);
+
 
   return (
-    <div className="grid gap-5">
-      <Card>
-        <CardHeader className="flex flex-row items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
+    <div className="space-y-6">
+      <header>
+        <p className="eyebrow">个人设置</p>
+        <h1 className="page-heading mt-2">按你的方式，接收提醒</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">管理通知偏好、宿舍策略与账号安全。</p>
+      </header>
+      <div className="grid items-start gap-6 lg:grid-cols-[180px_minmax(0,1fr)]">
+        <nav aria-label="设置分区" className="flex flex-wrap gap-2 lg:sticky lg:top-6 lg:flex-col">
+          {[
+            ["notification-settings", "提醒邮箱"],
+            ["delivery-settings", "发送偏好"],
+            ["password-settings", "账号安全"],
+            ["room-alert-settings", "宿舍提醒策略"],
+            ["account-deletion", "注销账号"]
+          ].map(([id, label]) => (
+            <a key={id} href={`#${id}`} className="rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{label}</a>
+          ))}
+        </nav>
+        <div className="min-w-0 space-y-6">
+      <Card id="notification-settings" className="scroll-mt-6 overflow-hidden">
+        <CardHeader className="flex flex-row items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <Mail size={18} />
           </div>
           <div>
-            <CardTitle>提醒邮箱</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">低电量邮件会发送到验证后的提醒邮箱。</p>
+            <CardTitle className="text-base">提醒邮箱</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">为低电量提醒选择一个常用邮箱，验证后即可接收通知。</p>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border border-border p-3">
+          <div className="grid gap-4 border-b border-border pb-5 md:grid-cols-2">
+            <div>
               <div className="text-xs text-muted-foreground">登录邮箱</div>
-              <div className="mt-1 break-all text-sm font-medium">{user?.email ?? "正在读取账号信息"}</div>
+              <div className="mt-1 break-all text-sm font-medium">{accountEmail}</div>
             </div>
-            <div className="rounded-lg border border-border p-3">
+            <div>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs text-muted-foreground">当前提醒邮箱</div>
-                  <div className="mt-1 break-all text-sm font-medium">{user?.notification_email || user?.email || "--"}</div>
+                  <div className="mt-1 break-all text-sm font-medium">{notificationEmailLabel}</div>
                 </div>
-                <Badge tone={user?.notification_email_verified || !user?.notification_email ? "success" : "warning"}>
-                  {user?.notification_email_verified || !user?.notification_email ? "已验证" : "待验证"}
+                <Badge tone={notificationEmailVerified ? "success" : user ? "warning" : "muted"}>
+                  {user ? (notificationEmailVerified ? "已验证" : "待验证") : userLoading ? "读取中" : userError ? "读取失败" : "暂无"}
                 </Badge>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/50 p-4">
             <div>
               <div className="text-sm font-medium">测试邮件</div>
               <div className="mt-1 text-xs text-muted-foreground">
@@ -357,7 +426,10 @@ export function SettingsView({
                 id="notification-email"
                 type="email"
                 value={notificationEmail}
-                onChange={(event) => setNotificationEmail(event.target.value)}
+                onChange={(event) => {
+                  setNotificationEmailDirty(true);
+                  setNotificationEmail(event.target.value);
+                }}
                 placeholder="you@example.com"
               />
             </div>
@@ -396,7 +468,19 @@ export function SettingsView({
             </div>
           ) : null}
 
-          <div className="grid gap-3 border-t border-border pt-4 lg:grid-cols-[1fr_220px_180px_auto] lg:items-start">
+        </CardContent>
+      </Card>
+
+      <Card id="delivery-settings" className="scroll-mt-6">
+        <CardHeader className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><Send size={18} /></div>
+          <div>
+            <CardTitle className="text-base">发送偏好</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">设置账号默认通知频率与用电日报，避免重复打扰。</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-5 md:grid-cols-2">
             <div>
               <Label htmlFor="user-notify-cooldown">默认邮件发送间隔（小时）</Label>
               <Input
@@ -405,6 +489,7 @@ export function SettingsView({
                 min={minimumNotifyCooldownHours ?? 0}
                 value={userNotifyCooldown}
                 onChange={(event) => {
+                  setPreferencesDirty(true);
                   setUserNotifyCooldown(event.target.value);
                   setUserNotifyCooldownTouched(true);
                 }}
@@ -416,12 +501,15 @@ export function SettingsView({
                   : "用于限制同一个宿舍低电量邮件重复发送的频率"}
               </div>
             </div>
-            <label className="mt-6 inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <label className="inline-flex items-center gap-3 rounded-xl bg-muted/50 p-4 text-sm">
               <input
                 className="h-4 w-4 accent-primary"
                 type="checkbox"
                 checked={dailyReportEnabled}
-                onChange={(event) => setDailyReportEnabled(event.target.checked)}
+                onChange={(event) => {
+                  setPreferencesDirty(true);
+                  setDailyReportEnabled(event.target.checked);
+                }}
               />
               每天 8 点发送用电日报
             </label>
@@ -433,14 +521,17 @@ export function SettingsView({
                 min={1}
                 max={30}
                 value={dailyReportIntervalDays}
-                onChange={(event) => setDailyReportIntervalDays(event.target.value)}
+                onChange={(event) => {
+                  setPreferencesDirty(true);
+                  setDailyReportIntervalDays(event.target.value);
+                }}
               />
               <div className={dailyReportIntervalInvalid ? "mt-1 text-xs text-danger" : "mt-1 text-xs text-muted-foreground"}>
                 {dailyReportIntervalInvalid ? "间隔至少为 1 天" : "例如 1 表示每天发送，3 表示每 3 天发送"}
               </div>
             </div>
             <Button
-              className="lg:mt-6 lg:w-[104px]"
+              className="justify-self-start md:col-span-2"
               disabled={updatingPreferences || userNotifyCooldownHasError || dailyReportIntervalInvalid}
               onClick={() =>
                 onUpdatePreferences({
@@ -458,18 +549,18 @@ export function SettingsView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
+      <Card id="password-settings" className="scroll-mt-6">
+        <CardHeader className="flex flex-row items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <KeyRound size={18} />
           </div>
           <div>
-            <CardTitle>修改密码</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">保存后会立即使其他设备上的旧登录会话失效。</p>
+            <CardTitle className="text-base">账号安全</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">更新登录密码，保存后其他设备上的旧登录会话将立即失效。</p>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
-          <div>
+        <CardContent className="grid gap-5 md:grid-cols-2">
+          <div className="md:col-span-2 md:max-w-sm">
             <Label htmlFor="current-password">当前密码</Label>
             <Input
               id="current-password"
@@ -504,7 +595,7 @@ export function SettingsView({
             {confirmPassword && confirmPassword !== newPassword ? <div className="mt-1 text-xs text-danger">两次输入的密码不一致</div> : null}
           </div>
           <Button
-            className="lg:mb-[1px] lg:w-[104px]"
+            className="justify-self-start md:col-span-2"
             disabled={
               updatingPassword ||
               currentPassword.length === 0 ||
@@ -521,17 +612,17 @@ export function SettingsView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
+      <Card id="room-alert-settings" className="scroll-mt-6">
+        <CardHeader className="flex flex-row items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <Bell size={18} />
           </div>
           <div>
-            <CardTitle>宿舍提醒策略</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">每个宿舍可以单独设置提醒策略；普通用户的邮件间隔和立即同步冷却不能低于平台默认值。</p>
+            <CardTitle className="text-base">宿舍提醒策略</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">各宿舍可以独立设置。普通用户的邮件间隔和同步冷却不能低于平台默认值。</p>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="space-y-4">
           {loading ? (
             <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 animate-spin" size={18} />
@@ -557,28 +648,30 @@ export function SettingsView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-danger/10 text-danger">
+      <Card id="account-deletion" className="scroll-mt-6 border-danger/25">
+        <CardHeader className="flex flex-row items-start gap-3 border-danger/20">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-danger/10 text-danger">
             <Trash2 size={18} />
           </div>
           <div>
-            <CardTitle>注销账号</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">删除账号会移除你的宿舍绑定和提醒记录，历史电量读数会继续作为宿舍公共数据保留。</p>
+            <CardTitle className="text-base">注销账号</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">此操作不可撤销。宿舍绑定和提醒记录会被移除，历史电量读数将作为宿舍公共数据保留。</p>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+        <CardContent className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <div>
             <Label htmlFor="delete-account-password">当前密码</Label>
             <Input
               id="delete-account-password"
               type="password"
+              autoComplete="current-password"
               value={deletePassword}
               onChange={(event) => setDeletePassword(event.target.value)}
               placeholder="输入密码确认注销"
             />
           </div>
           <Button
+            className="text-danger hover:bg-danger/10 hover:text-danger"
             disabled={deletingAccount || deletePassword.length === 0}
             onClick={() => {
               if (window.confirm("确定要注销账号吗？这个操作不能撤销。")) {
@@ -592,6 +685,8 @@ export function SettingsView({
           </Button>
         </CardContent>
       </Card>
+        </div>
+      </div>
     </div>
   );
 }

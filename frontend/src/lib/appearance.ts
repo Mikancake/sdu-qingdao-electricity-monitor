@@ -1,6 +1,8 @@
 import type { AppearanceSettings } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? "http://127.0.0.1:8000" : window.location.origin);
 export const APPEARANCE_STORAGE_KEY = "sdu-electricity-appearance";
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
@@ -10,11 +12,11 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   light_background_blurred_url: null,
   dark_background_blurred_url: null,
   background_position: "center",
-  background_overlay_opacity: 0.42,
-  background_blur_px: 0,
-  glass_card_opacity: 0.62,
-  glass_blur_px: 10,
-  glass_effect_mode: "lite"
+  background_overlay_opacity: 0.28,
+  background_blur_px: 4,
+  glass_card_opacity: 0.7,
+  glass_blur_px: 8,
+  glass_effect_mode: "frosted"
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {

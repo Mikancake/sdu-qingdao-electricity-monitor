@@ -5,12 +5,15 @@ config.yaml.*.bak
 *.bak
 *.tmp
 *.tar
+*.tar.gz
 *.pid
 .env
 .env.*
+!.env.docker.example
 !.env.example
 backend/.env
 backend/.env.*
+!backend/.env.docker.example
 !backend/.env.example
 frontend/.env
 frontend/.env.*
@@ -40,6 +43,9 @@ node_modules/
 .pnpm-store/
 frontend/node_modules/
 frontend/dist/
+frontend/dist-*.zip
+sdu-electricity-update-*.zip
+sdu-electricity-update-*.tar.gz
 backend/uploads/
 *.tsbuildinfo
 __pycache__/

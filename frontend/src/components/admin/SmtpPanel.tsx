@@ -154,7 +154,7 @@ export function SmtpPanel({
 
   return (
     <div className="grid gap-5">
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>添加 SMTP 发件邮箱</CardTitle>
         </CardHeader>
@@ -206,7 +206,7 @@ export function SmtpPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>SMTP 池</CardTitle>
         </CardHeader>
@@ -363,7 +363,7 @@ export function SmtpPanel({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>SMTP 健康日志</CardTitle>
         </CardHeader>

@@ -28,11 +28,25 @@ def _daily_count_map(db: Session, timestamp_column, cutoff: datetime, *criteria)
     return {str(day): _count(count) for day, count in rows}
 
 
+def _daily_current_reading_count_map(db: Session, cutoff: datetime) -> dict[str, int]:
+    day_expression = func.date(ElectricityReading.read_at)
+    rows = db.execute(
+        select(day_expression, func.count())
+        .join(Room, Room.id == ElectricityReading.room_id)
+        .where(
+            ElectricityReading.read_at >= cutoff,
+            ElectricityReading.provider == Room.provider,
+        )
+        .group_by(day_expression)
+    )
+    return {str(day): _count(count) for day, count in rows}
+
+
 def _build_activity_series(db: Session, *, today: date | None = None) -> list[AdminActivityPoint]:
     end_day = today or datetime.now().date()
     days = [end_day - timedelta(days=offset) for offset in range(6, -1, -1)]
     cutoff = datetime.combine(days[0], datetime.min.time())
-    readings = _daily_count_map(db, ElectricityReading.read_at, cutoff)
+    readings = _daily_current_reading_count_map(db, cutoff)
     emails = _daily_count_map(
         db,
         EmailDeliveryLog.sent_at,
@@ -89,7 +103,10 @@ def _build_building_stats(db: Session) -> list[AdminBuildingStat]:
 
     latest_reading_id = (
         select(ElectricityReading.id)
-        .where(ElectricityReading.room_id == Room.id)
+        .where(
+            ElectricityReading.room_id == Room.id,
+            ElectricityReading.provider == Room.provider,
+        )
         .order_by(ElectricityReading.read_at.desc(), ElectricityReading.id.desc())
         .limit(1)
         .correlate(Room)
@@ -213,7 +230,13 @@ def build_admin_status(db: Session) -> AdminStatusOut:
             func.count(User.id).filter(User.is_verified.is_(True)),
         )
     ).one()
-    latest_read_at = db.scalar(select(ElectricityReading.read_at).order_by(ElectricityReading.read_at.desc()).limit(1))
+    latest_read_at = db.scalar(
+        select(ElectricityReading.read_at)
+        .join(Room, Room.id == ElectricityReading.room_id)
+        .where(ElectricityReading.provider == Room.provider)
+        .order_by(ElectricityReading.read_at.desc())
+        .limit(1)
+    )
 
     return AdminStatusOut(
         token_count=_count(token_count),

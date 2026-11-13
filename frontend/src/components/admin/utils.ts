@@ -5,7 +5,7 @@ import type { AdminLogQuery } from "../../lib/types";
 export const ADMIN_TOKEN_KEY = "sdu-electricity-admin-token";
 export const ADMIN_THEME_KEY = "sdu-electricity-theme";
 
-export type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "settings" | "account" | "audit";
+export type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "realtime" | "announcements" | "settings" | "account" | "audit";
 export type SortDirection = "asc" | "desc";
 export type LogFilters = Required<Pick<AdminLogQuery, "days" | "limit" | "q" | "sort">>;
 
