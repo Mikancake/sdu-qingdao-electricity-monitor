@@ -1,12 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, createApiClient, getApiErrorMessage } from "./lib/api";
+import { createApiClient, getApiErrorMessage as describeError } from "./lib/api";
 import type { UserRoomBinding } from "./lib/types";
 import { AuthPanel } from "./components/AuthPanel";
 import { AppShell, type ViewKey } from "./components/AppShell";
-import { DashboardView, type ChartRangeState } from "./components/DashboardView";
-import { NoticeDialog } from "./components/NoticeDialog";
+import { DashboardView, isChartRangeValid, type ChartRangeState } from "./components/DashboardView";
+import { ActionNotice } from "./components/ActionNotice";
 import { RecordsView } from "./components/RecordsView";
 import { RoomsView } from "./components/RoomsView";
 import { SettingsView } from "./components/SettingsView";
@@ -21,52 +21,15 @@ function readStoredToken() {
   return window.localStorage.getItem(TOKEN_KEY);
 }
 function readStoredView(): ViewKey {
-  const value = window.localStorage.getItem(ACTIVE_VIEW_KEY);
+  const value = new URL(window.location.href).searchParams.get("view") ?? window.localStorage.getItem(ACTIVE_VIEW_KEY);
   return value === "rooms" || value === "records" || value === "settings" ? value : "dashboard";
 }
 
-function formatRetryAfter(seconds: number) {
-  if (seconds < 60) {
-    return `${Math.max(1, Math.ceil(seconds))} 秒`;
-  }
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes} 分钟`;
-  }
-  return `${Math.ceil(minutes / 60)} 小时`;
-}
-function describeError(error: unknown) {
-  if (error instanceof ApiError) {
-    if (error.status >= 500) {
-      return "服务器处理失败，请稍后再试；如果刚刚手动刷新过，可能是冷却时间还没有同步完成。";
-    }
-    if (typeof error.detail === "string") {
-      return error.detail;
-    }
-    if (
-      error.detail &&
-      typeof error.detail === "object" &&
-      "kind" in error.detail &&
-      error.detail.kind === "manual_check_cooldown"
-    ) {
-      const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 300;
-      return `手动同步冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
-    }
-    if (
-      error.detail &&
-      typeof error.detail === "object" &&
-      "kind" in error.detail &&
-      (error.detail.kind === "test_email_cooldown" || error.detail.kind === "verification_email_cooldown")
-    ) {
-      const retryAfter = "retry_after_seconds" in error.detail ? Number(error.detail.retry_after_seconds) : 1800;
-      return `邮件发送冷却中，请 ${formatRetryAfter(retryAfter)}后再试。`;
-    }
-    return getApiErrorMessage(error);
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "请求失败";
+function viewUrl(view: ViewKey) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", view);
+  url.hash = "";
+  return url;
 }
 
 function toApiDateTime(value: string) {
@@ -98,17 +61,10 @@ function buildChartParams(range: ChartRangeState) {
 
 function UserApp() {
   const queryClient = useQueryClient();
-  const [token, setToken] = useState<string | null>(() => readStoredToken());
-  const [activeView, setActiveView] = useState<ViewKey>(() => readStoredView());
-  const [checkingId, setCheckingId] = useState<number | null>(null);
-  const [updatingId, setUpdatingId] = useState<number | null>(null);
-  const [selectedChartBindingId, setSelectedChartBindingId] = useState<number | null>(null);
-  const [chartRange, setChartRange] = useState<ChartRangeState>({ key: "7d", startAt: "", endAt: "" });
-  const [notificationEmailCode, setNotificationEmailCode] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [token, setToken] = useState(readStoredToken);
+  const [generation, setGeneration] = useState(0);
+  const [expired, setExpired] = useState(false);
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem(THEME_KEY) === "dark");
-
-  const api = useMemo(() => createApiClient(token), [token]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -116,82 +72,136 @@ function UserApp() {
   }, [darkMode]);
 
   useEffect(() => {
+    function syncSession(event: StorageEvent) {
+      if (event.storageArea !== window.localStorage || (event.key !== null && event.key !== TOKEN_KEY)) return;
+      queryClient.clear();
+      setGeneration(value => value + 1);
+      setExpired(false);
+      setToken(readStoredToken());
+    }
+    window.addEventListener("storage", syncSession);
+    return () => window.removeEventListener("storage", syncSession);
+  }, [queryClient]);
+
+  const endSession = useCallback((expiredSession: boolean) => {
+    if (readStoredToken() !== token) return;
+    window.localStorage.removeItem(TOKEN_KEY);
+    queryClient.clear();
+    setExpired(expiredSession);
+    setToken(null);
+  }, [queryClient, token]);
+
+  if (!token) return <>
+    {expired && <p role="status" className="border-b border-warning bg-panel px-4 py-3 text-center text-sm">登录已失效，请重新登录。</p>}
+    <AuthPanel onLogin={nextToken => {
+      window.localStorage.setItem(TOKEN_KEY, nextToken);
+      window.localStorage.setItem(ACTIVE_VIEW_KEY, "dashboard");
+      setExpired(false);
+      setToken(nextToken);
+    }} />
+  </>;
+
+  return <StudentWorkspace key={generation} token={token} endSession={endSession}
+    rotateToken={next => {
+      if (readStoredToken() !== token) return false;
+      window.localStorage.setItem(TOKEN_KEY, next);
+      setToken(next);
+      return true;
+    }} darkMode={darkMode} toggleTheme={() => setDarkMode(value => !value)} />;
+}
+
+interface WorkspaceProps {
+  token: string;
+  endSession: (expired: boolean) => void;
+  rotateToken: (next: string) => boolean;
+  darkMode: boolean;
+  toggleTheme: () => void;
+}
+
+function StudentWorkspace({ token, endSession, rotateToken, darkMode, toggleTheme }: WorkspaceProps) {
+  const queryClient = useQueryClient();
+  const [activeView, setActiveView] = useState<ViewKey>(() => readStoredView());
+  const [checkingId, setCheckingId] = useState<number | null>(null);
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [preferredBindingId, setSelectedChartBindingId] = useState<number | null>(null);
+  const [chartRange, setChartRange] = useState<ChartRangeState>({ key: "7d", startAt: "", endAt: "" });
+  const [notificationEmailCode, setNotificationEmailCode] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const api = useMemo(() => createApiClient(token, () => endSession(true)), [token, endSession]);
+
+  useEffect(() => {
     window.localStorage.setItem(ACTIVE_VIEW_KEY, activeView);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("view") !== activeView) {
+      url.searchParams.set("view", activeView);
+      window.history.replaceState(null, "", url);
+    }
   }, [activeView]);
 
-  function handleLogin(nextToken: string) {
-    window.localStorage.setItem(TOKEN_KEY, nextToken);
-    setToken(nextToken);
-    setActiveView("dashboard");
-    setNotice(null);
-  }
+  useEffect(() => {
+    const restore = () => setActiveView(readStoredView());
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
 
-  function handleLogout() {
-    window.localStorage.removeItem(TOKEN_KEY);
-    setToken(null);
-    queryClient.clear();
+  function navigate(view: ViewKey) {
+    if (view === activeView) return;
+    window.history.pushState(null, "", viewUrl(view));
+    setActiveView(view);
   }
 
   const meQuery = useQuery({
     queryKey: ["me"],
-    queryFn: api.getMe,
-    enabled: Boolean(token)
+    queryFn: api.getMe
   });
 
   const runtimeLimitsQuery = useQuery({
     queryKey: ["runtime-limits"],
     queryFn: api.getRuntimeLimits,
-    enabled: Boolean(token)
+    enabled: activeView === "settings"
   });
 
   const summariesQuery = useQuery({
     queryKey: ["room-summaries"],
     queryFn: api.listRoomSummaries,
-    enabled: Boolean(token)
+    enabled: activeView === "dashboard" || activeView === "rooms"
   });
   const announcementsQuery = useQuery({
     queryKey: ["announcements"],
     queryFn: api.listAnnouncements,
-    enabled: Boolean(token),
+    enabled: activeView === "dashboard",
     staleTime: 60_000
   });
 
   const bindingsQuery = useQuery({
     queryKey: ["room-bindings"],
     queryFn: api.listRoomBindings,
-    enabled: Boolean(token)
+    enabled: activeView === "rooms" || activeView === "settings"
   });
 
   const buildingsQuery = useQuery({
     queryKey: ["buildings"],
     queryFn: api.listBuildings,
-    enabled: Boolean(token)
+    enabled: activeView === "rooms",
+    staleTime: 5 * 60_000
   });
 
   const attemptsQuery = useQuery({
     queryKey: ["check-attempts"],
     queryFn: api.listCheckAttempts,
-    enabled: Boolean(token)
+    enabled: activeView === "records"
   });
 
-  useEffect(() => {
-    const summaries = summariesQuery.data ?? [];
-    if (summaries.length > 0 && !summaries.some((item) => item.binding_id === selectedChartBindingId)) {
-      setSelectedChartBindingId(summaries[0].binding_id);
-    }
-  }, [selectedChartBindingId, summariesQuery.data]);
+  const summaries = summariesQuery.data ?? [];
+  const selectedChartBindingId = summaries.find(item => item.binding_id === preferredBindingId)?.binding_id
+    ?? summaries[0]?.binding_id ?? null;
 
   const chartReadingsQuery = useQuery({
     queryKey: ["chart-readings", selectedChartBindingId, chartRange],
     queryFn: () => api.listRoomReadings(selectedChartBindingId as number, buildChartParams(chartRange)),
-    enabled: Boolean(token && selectedChartBindingId)
+    enabled: activeView === "dashboard" && selectedChartBindingId !== null && isChartRangeValid(chartRange)
   });
-
-  useEffect(() => {
-    if (meQuery.error instanceof ApiError && meQuery.error.status === 401) {
-      handleLogout();
-    }
-  }, [meQuery.error]);
 
   const bindMutation = useMutation({
     mutationFn: api.bindRoom,
@@ -199,6 +209,7 @@ function UserApp() {
       setNotice("宿舍已绑定，并已保存本次电量读数。");
       void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
       void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
+      void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
     },
     onError: (error) => setNotice(describeError(error))
   });
@@ -206,15 +217,14 @@ function UserApp() {
   const checkMutation = useMutation({
     mutationFn: api.checkRoom,
     onMutate: (bindingId) => setCheckingId(bindingId),
-    onSuccess: () => {
+    onSuccess: async () => {
       setNotice("电量已刷新。");
-      void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
-      void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
-      void queryClient.invalidateQueries({ queryKey: ["chart-readings"] });
+      await Promise.all(["room-summaries", "check-attempts", "chart-readings"].map(key =>
+        queryClient.invalidateQueries({ queryKey: [key] })));
     },
-    onError: (error) => {
+    onError: async (error) => {
       setNotice(describeError(error));
-      void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
+      await Promise.all(["room-summaries", "check-attempts"].map(key => queryClient.invalidateQueries({ queryKey: [key] })));
     },
     onSettled: () => setCheckingId(null)
   });
@@ -227,6 +237,8 @@ function UserApp() {
       setNotice("宿舍设置已保存。");
       void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
       void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
+      void queryClient.invalidateQueries({ queryKey: ["chart-readings"] });
+      void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
     },
     onError: (error) => setNotice(describeError(error)),
     onSettled: () => setUpdatingId(null)
@@ -272,8 +284,7 @@ function UserApp() {
   const updatePasswordMutation = useMutation({
     mutationFn: api.updatePassword,
     onSuccess: (result) => {
-      window.localStorage.setItem(TOKEN_KEY, result.access_token);
-      setToken(result.access_token);
+      if (!rotateToken(result.access_token)) return;
       queryClient.setQueryData(["me"], result.user);
       setNotice("密码已更新，其他旧登录会话已经失效。");
     },
@@ -282,11 +293,7 @@ function UserApp() {
 
   const deleteAccountMutation = useMutation({
     mutationFn: api.deleteAccount,
-    onSuccess: () => {
-      window.localStorage.removeItem(TOKEN_KEY);
-      setToken(null);
-      queryClient.clear();
-    },
+    onSuccess: () => endSession(false),
     onError: (error) => setNotice(describeError(error))
   });
 
@@ -296,25 +303,19 @@ function UserApp() {
       setNotice("宿舍绑定已删除。");
       void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
       void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
+      void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
     },
     onError: (error) => setNotice(describeError(error))
   });
 
-  function refreshAll() {
-    void queryClient.invalidateQueries({ queryKey: ["me"] });
-    void queryClient.invalidateQueries({ queryKey: ["room-summaries"] });
-    void queryClient.invalidateQueries({ queryKey: ["room-bindings"] });
-    void queryClient.invalidateQueries({ queryKey: ["buildings"] });
-    void queryClient.invalidateQueries({ queryKey: ["check-attempts"] });
-    void queryClient.invalidateQueries({ queryKey: ["chart-readings"] });
-    void queryClient.invalidateQueries({ queryKey: ["runtime-limits"] });
-    void queryClient.invalidateQueries({ queryKey: ["announcements"] });
-  }
-
-  function logout() {
-    window.localStorage.removeItem(TOKEN_KEY);
-    setToken(null);
-    queryClient.clear();
+  async function refreshAll() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await queryClient.invalidateQueries({ type: "active" });
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   function toggleBinding(binding: UserRoomBinding) {
@@ -325,11 +326,6 @@ function UserApp() {
     updateMutation.mutate({ id: binding.id, payload });
   }
 
-  if (!token) {
-    return <AuthPanel onLogin={handleLogin} />;
-  }
-
-  const summaries = summariesQuery.data ?? [];
   const bindings = bindingsQuery.data ?? [];
   const buildings = buildingsQuery.data ?? [];
   const attempts = attemptsQuery.data ?? [];
@@ -344,18 +340,22 @@ function UserApp() {
       user={meQuery.data}
       userLoading={meQuery.isLoading}
       userError={Boolean(meQuery.error)}
-      onChangeView={setActiveView}
-      onLogout={logout}
+      onChangeView={navigate}
+      onLogout={() => endSession(false)}
       onRefresh={refreshAll}
-      onToggleTheme={() => setDarkMode((value) => !value)}
+      refreshing={refreshing}
+      onToggleTheme={toggleTheme}
     >
-      <NoticeDialog message={notice} onClose={() => setNotice(null)} />
+      <ActionNotice message={notice} onClose={() => setNotice(null)} />
 
       <Suspense fallback={<ViewLoading />}>
         {activeView === "dashboard" ? (
           <DashboardView
             announcements={announcementsQuery.data ?? []}
-            announcementsStorageKey={`sdu-electricity-dismissed-announcements-${meQuery.data?.id ?? "anon"}`}
+            summariesError={summariesQuery.isError}
+            chartError={chartReadingsQuery.isError}
+            onRetry={() => void summariesQuery.refetch()}
+            onRetryChart={() => void chartReadingsQuery.refetch()}
             summaries={summaries}
             selectedBindingId={selectedChartBindingId}
             chartReadings={chartReadingsQuery.data ?? []}
@@ -366,7 +366,7 @@ function UserApp() {
             onSelectBinding={setSelectedChartBindingId}
             onChangeChartRange={setChartRange}
             onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
-            onGoRooms={() => setActiveView("rooms")}
+            onGoRooms={() => navigate("rooms")}
           />
         ) : null}
 
@@ -375,19 +375,23 @@ function UserApp() {
             buildings={buildings}
             bindings={bindings}
             loading={bindingsQuery.isLoading || buildingsQuery.isLoading}
+            bindingsError={bindingsQuery.isError}
+            buildingsError={buildingsQuery.isError}
+            deletingId={deleteMutation.isPending ? deleteMutation.variables : null}
             saving={bindMutation.isPending}
             updatingId={updatingId}
             checkingId={checkingId}
             manualCheckAvailableAtByBinding={manualCheckAvailableAtByBinding}
-            onBindRoom={(payload) => bindMutation.mutate(payload)}
-            onUpdateRoom={(bindingId, payload) => updateMutation.mutate({ id: bindingId, payload })}
+            onBindRoom={(payload, onSuccess) => bindMutation.mutate(payload, { onSuccess })}
+            onUpdateRoom={(id, payload, onSuccess) => updateMutation.mutate({ id, payload }, { onSuccess })}
             onCheckRoom={(bindingId) => checkMutation.mutate(bindingId)}
             onToggleRoom={toggleBinding}
             onDeleteRoom={(bindingId) => deleteMutation.mutate(bindingId)}
           />
         ) : null}
 
-        {activeView === "records" ? <RecordsView attempts={attempts} loading={attemptsQuery.isLoading} /> : null}
+        {activeView === "records" && <RecordsView attempts={attempts} loading={attemptsQuery.isLoading}
+          error={attemptsQuery.isError} onRetry={() => void attemptsQuery.refetch()} />}
 
         {activeView === "settings" ? (
           <SettingsView
@@ -396,6 +400,7 @@ function UserApp() {
             userError={Boolean(meQuery.error)}
             bindings={bindings}
             loading={bindingsQuery.isLoading}
+            bindingsError={bindingsQuery.isError}
             updatingId={updatingId}
             requestingEmail={requestNotificationEmailMutation.isPending}
             verifyingEmail={verifyNotificationEmailMutation.isPending}
@@ -409,12 +414,12 @@ function UserApp() {
             onUpdateBinding={updateBindingSettings}
             onUpdatePreferences={(payload) => updatePreferencesMutation.mutate(payload)}
             onSendTestEmail={() => testEmailMutation.mutate()}
-            onUpdatePassword={(oldPassword, newPassword) =>
-              updatePasswordMutation.mutate({ old_password: oldPassword, new_password: newPassword })
+            onUpdatePassword={(oldPassword, newPassword, onSuccess) =>
+              updatePasswordMutation.mutate({ old_password: oldPassword, new_password: newPassword }, { onSuccess })
             }
             onDeleteAccount={(password) => deleteAccountMutation.mutate({ password })}
-            onRequestNotificationEmail={(email) => requestNotificationEmailMutation.mutate({ email })}
-            onVerifyNotificationEmail={(email, code) => verifyNotificationEmailMutation.mutate({ email, code })}
+            onRequestNotificationEmail={(email, onSuccess) => requestNotificationEmailMutation.mutate({ email }, { onSuccess })}
+            onVerifyNotificationEmail={(email, code, onSuccess) => verifyNotificationEmailMutation.mutate({ email, code }, { onSuccess })}
           />
         ) : null}
       </Suspense>
@@ -431,7 +436,7 @@ function ViewLoading() {
 }
 
 export default function App() {
-  if (window.location.pathname.startsWith("/admin")) {
+  if (window.location.pathname === "/admin" || window.location.pathname.startsWith("/admin/")) {
     return (
       <Suspense fallback={<ViewLoading />}>
         <AdminApp />

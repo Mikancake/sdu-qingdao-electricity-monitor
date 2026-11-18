@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
   Database,
@@ -17,9 +17,11 @@ import {
 } from "lucide-react";
 
 import { ApiError, createApiClient } from "../lib/api";
+import type { ApiClient } from "../lib/api";
 import type { AdminAuditLog, AdminPageQuery } from "../lib/types";
 import { Button } from "./ui/button";
-import { NoticeDialog } from "./NoticeDialog";
+import { ActionNotice } from "./ActionNotice";
+import { saveAppearanceSettings } from "../lib/appearance";
 import { AccountPanel } from "./admin/AccountPanel";
 import { AdminLogin } from "./admin/AdminLogin";
 import { AuditPanel } from "./admin/AuditPanel";
@@ -37,19 +39,101 @@ import { ADMIN_THEME_KEY, ADMIN_TOKEN_KEY, DEFAULT_LOG_FILTERS, describeError } 
 import type { AdminView, LogFilters } from "./admin/utils";
 
 
+const nav: AdminNavItem[] = [
+  { key: "status", label: "状态", icon: <Server size={17} /> },
+  { key: "users", label: "用户", icon: <Users size={17} /> },
+  { key: "rooms", label: "宿舍", icon: <Building2 size={17} /> },
+  { key: "tokens", label: "Token", icon: <KeyRound size={17} /> },
+  { key: "smtp", label: "SMTP", icon: <Mail size={17} /> },
+  { key: "realtime", label: "实时性", icon: <Radio size={17} /> },
+  { key: "announcements", label: "公告", icon: <Megaphone size={17} /> },
+  { key: "settings", label: "设置", icon: <Database size={17} /> },
+  { key: "account", label: "账号", icon: <ShieldCheck size={17} /> },
+  { key: "audit", label: "审计", icon: <ScrollText size={17} /> }
+];
 
+function viewFromLocation(): AdminView {
+  return nav.find((item) => item.key === window.location.hash.slice(1))?.key ?? "status";
+}
 
-
-
+function queryProblem(label: string, query: { isError: boolean; error: unknown; isFetching: boolean; refetch: () => Promise<unknown> }) {
+  return query.isError ? <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-danger/30 p-3 text-sm">
+    <span className="break-words">{label}读取失败：{describeError(query.error)}</span>
+    <Button disabled={query.isFetching} size="sm" variant="secondary" onClick={() => void query.refetch()}>重试</Button>
+  </div> : null;
+}
 
 export function AdminApp() {
+  const [token, setToken] = useState(() => localStorage.getItem(ADMIN_TOKEN_KEY));
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem(ADMIN_THEME_KEY) === "dark");
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem(ADMIN_THEME_KEY, darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  useEffect(() => {
+    const syncSession = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage || (event.key !== ADMIN_TOKEN_KEY && event.key !== null)) return;
+      setSessionMessage(null);
+      setToken(localStorage.getItem(ADMIN_TOKEN_KEY));
+    };
+    window.addEventListener("storage", syncSession);
+    return () => window.removeEventListener("storage", syncSession);
+  }, []);
+
+  const endSession = useCallback((message: string | null) => {
+    if (localStorage.getItem(ADMIN_TOKEN_KEY) !== token) return;
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    setSessionMessage(message);
+    setToken(null);
+  }, [token]);
+
+  // A retired session's requests must never populate the next administrator's cache.
+  const { api, client } = useMemo(() => ({
+    api: createApiClient(token, () => endSession("管理会话已失效，请重新登录。")),
+    client: new QueryClient({ defaultOptions: {
+      queries: { refetchOnWindowFocus: false, retry: (count, error) => count < 1 && !(error instanceof ApiError && error.status < 500) },
+      mutations: { gcTime: 0 }
+    } })
+  }), [token, endSession]);
+  useEffect(() => () => {
+    if (localStorage.getItem(ADMIN_TOKEN_KEY) !== token) client.clear();
+  }, [client, token]);
+
+  function acceptToken(nextToken: string, message: string | null) {
+    if (localStorage.getItem(ADMIN_TOKEN_KEY) !== token) return;
+    localStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
+    setSessionMessage(message);
+    setToken(nextToken);
+  }
+
+  if (!token) return <AdminLogin message={sessionMessage} onLogin={(next) => acceptToken(next, null)} />;
+  return <QueryClientProvider client={client}>
+    <AdminWorkspace key={token} token={token} api={api} initialNotice={sessionMessage} darkMode={darkMode}
+      toggleTheme={() => setDarkMode((value) => !value)} handleLogout={() => endSession(null)}
+      rotateToken={(next) => acceptToken(next, "管理员密码已更新，其他旧登录会话已经失效。")} />
+  </QueryClientProvider>;
+}
+
+function AdminWorkspace({ token, api, initialNotice, darkMode, toggleTheme, handleLogout, rotateToken }: {
+  token: string; api: ApiClient; initialNotice: string | null; darkMode: boolean; toggleTheme: () => void;
+  handleLogout: () => void; rotateToken: (next: string) => void;
+}) {
   const queryClient = useQueryClient();
-  const [token, setToken] = useState(() => window.localStorage.getItem(ADMIN_TOKEN_KEY));
-  const [activeView, setActiveView] = useState<AdminView>("status");
+  const [activeView, setActiveView] = useState<AdminView>(viewFromLocation);
+  useEffect(() => {
+    const sync = () => setActiveView(viewFromLocation());
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  function navigate(view: AdminView) {
+    if (view !== activeView) window.location.hash = view;
+  }
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedProbeId, setSelectedProbeId] = useState<number | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem(ADMIN_THEME_KEY) === "dark");
+  const [notice, setNotice] = useState<string | null>(initialNotice);
   const [tokenLogFilters, setTokenLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
   const [smtpLogFilters, setSmtpLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
   const [auditLogFilters, setAuditLogFilters] = useState<LogFilters>(DEFAULT_LOG_FILTERS);
@@ -65,111 +149,97 @@ export function AdminApp() {
     q: "",
     sort: "newest_desc"
   });
-  const api = useMemo(() => createApiClient(token), [token]);
 
   const meQuery = useQuery({ queryKey: ["admin-me"], queryFn: api.getAdminMe, enabled: Boolean(token) });
   const usersQuery = useQuery({
     queryKey: ["admin-users", userListQuery],
     queryFn: () => api.listAdminUsersPage(userListQuery),
-    placeholderData: (previous) => previous,
-    enabled: Boolean(token && activeView === "users")
+    enabled: meQuery.isSuccess && activeView === "users"
   });
   const userDetailQuery = useQuery({
     queryKey: ["admin-user", selectedUserId],
     queryFn: () => api.getAdminUser(selectedUserId as number),
-    enabled: Boolean(token && activeView === "users" && selectedUserId)
+    enabled: meQuery.isSuccess && activeView === "users" && selectedUserId !== null
   });
   const adminRoomsQuery = useQuery({
     queryKey: ["admin-rooms", roomListQuery],
     queryFn: () => api.listAdminRoomsPage(roomListQuery),
-    placeholderData: (previous) => previous,
-    enabled: Boolean(token && activeView === "rooms")
+    enabled: meQuery.isSuccess && activeView === "rooms"
   });
   const tokensQuery = useQuery({
     queryKey: ["admin-tokens"],
     queryFn: api.listAdminTokens,
-    enabled: Boolean(token && activeView === "tokens")
+    enabled: meQuery.isSuccess && activeView === "tokens"
   });
   const tokenLogsQuery = useQuery({
     queryKey: ["admin-token-health-logs", tokenLogFilters],
     queryFn: () => api.listAdminTokenHealthLogs(tokenLogFilters),
-    enabled: Boolean(token && activeView === "tokens")
+    enabled: meQuery.isSuccess && activeView === "tokens"
   });
   const smtpQuery = useQuery({
     queryKey: ["admin-smtp"],
     queryFn: api.listSmtpSettings,
-    enabled: Boolean(token && activeView === "smtp")
+    enabled: meQuery.isSuccess && activeView === "smtp"
   });
   const smtpLogsQuery = useQuery({
     queryKey: ["admin-smtp-health-logs", smtpLogFilters],
     queryFn: () => api.listSmtpHealthLogs(smtpLogFilters),
-    enabled: Boolean(token && activeView === "smtp")
+    enabled: meQuery.isSuccess && activeView === "smtp"
   });
   const appearanceQuery = useQuery({
     queryKey: ["admin-appearance"],
     queryFn: api.getAppearanceSettings,
-    enabled: Boolean(token && activeView === "settings")
+    enabled: meQuery.isSuccess && activeView === "settings"
   });
   const runtimeQuery = useQuery({
     queryKey: ["admin-runtime"],
     queryFn: api.getRuntimeSettings,
-    enabled: Boolean(token && (activeView === "settings" || activeView === "realtime"))
+    enabled: meQuery.isSuccess && (activeView === "settings" || activeView === "realtime")
   });
   const auditLogsQuery = useQuery({
     queryKey: ["admin-audit-logs", auditLogFilters],
     queryFn: () => api.listAdminAuditLogs(auditLogFilters),
-    enabled: Boolean(token && activeView === "audit")
+    enabled: meQuery.isSuccess && activeView === "audit"
   });
   const announcementsQuery = useQuery({
     queryKey: ["admin-announcements"],
     queryFn: api.listAdminAnnouncements,
-    enabled: Boolean(token && activeView === "announcements")
+    enabled: meQuery.isSuccess && activeView === "announcements"
   });
   const hwglRoomsQuery = useQuery({
     queryKey: ["admin-hwgl-rooms"],
     queryFn: () => api.listAdminHwglRooms(),
     staleTime: 5 * 60_000,
-    enabled: Boolean(token && activeView === "realtime")
+    enabled: meQuery.isSuccess && activeView === "realtime"
   });
   const hwglProbesQuery = useQuery({
     queryKey: ["admin-hwgl-probes"],
     queryFn: () => api.listAdminHwglProbes({ limit: 30 }),
     refetchInterval: activeView === "realtime" ? 5_000 : false,
-    placeholderData: (previous) => previous,
-    enabled: Boolean(token && activeView === "realtime")
+    enabled: meQuery.isSuccess && activeView === "realtime"
   });
   const hwglProbeDetailQuery = useQuery({
     queryKey: ["admin-hwgl-probe", selectedProbeId],
     queryFn: () => api.getAdminHwglProbe(selectedProbeId as number),
-    refetchInterval: activeView === "realtime" ? 5_000 : false,
-    enabled: Boolean(token && activeView === "realtime" && selectedProbeId)
+    refetchInterval: (query) => activeView === "realtime" && query.state.data?.status === "running" ? 5_000 : false,
+    enabled: meQuery.isSuccess && activeView === "realtime" && selectedProbeId !== null
   });
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
-    window.localStorage.setItem(ADMIN_THEME_KEY, darkMode ? "dark" : "light");
-  }, [darkMode]);
-
-  useEffect(() => {
-    if (meQuery.error instanceof ApiError && meQuery.error.status === 401) {
-      handleLogout();
+    if (usersQuery.data && userListQuery.page > Math.max(1, usersQuery.data.total_pages)) {
+      setUserListQuery({ ...userListQuery, page: Math.max(1, usersQuery.data.total_pages) });
     }
-  }, [meQuery.error]);
+  }, [userListQuery, usersQuery.data]);
+  useEffect(() => {
+    if (adminRoomsQuery.data && roomListQuery.page > Math.max(1, adminRoomsQuery.data.total_pages)) {
+      setRoomListQuery({ ...roomListQuery, page: Math.max(1, adminRoomsQuery.data.total_pages) });
+    }
+  }, [roomListQuery, adminRoomsQuery.data]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [activeView]);
 
-  function handleLogin(nextToken: string) {
-    window.localStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
-    setToken(nextToken);
-  }
-
-  function handleLogout() {
-    window.localStorage.removeItem(ADMIN_TOKEN_KEY);
-    setToken(null);
-    queryClient.clear();
-  }
 
   function refreshAdminAudit() {
     void queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
@@ -207,10 +277,7 @@ export function AdminApp() {
   const updateAdminPasswordMutation = useMutation({
     mutationFn: api.updateAdminPassword,
     onSuccess: (result) => {
-      handleLogin(result.access_token);
-      queryClient.setQueryData(["admin-me"], result.admin);
-      setNotice("管理员密码已更新，其他旧登录会话已经失效。");
-      refreshAdminAudit();
+      rotateToken(result.access_token);
     },
     onError: (error) => setNotice(describeError(error))
   });
@@ -256,9 +323,9 @@ export function AdminApp() {
 
   const deleteManagedUserMutation = useMutation({
     mutationFn: api.deleteAdminUser,
-    onSuccess: () => {
+    onSuccess: (_, id) => {
       setNotice("用户已删除。");
-      setSelectedUserId(null);
+      setSelectedUserId((current) => current === id ? null : current);
       refreshManagedUser();
       void queryClient.invalidateQueries({ queryKey: ["admin-status"] });
       refreshAdminAudit();
@@ -354,9 +421,10 @@ export function AdminApp() {
 
   const appearanceMutation = useMutation({
     mutationFn: api.updateAppearanceSettings,
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (localStorage.getItem(ADMIN_TOKEN_KEY) === token) saveAppearanceSettings(result);
       setNotice("全局外观已保存。");
-      void queryClient.invalidateQueries({ queryKey: ["admin-appearance"] });
+      queryClient.setQueryData(["admin-appearance"], result);
       refreshAdminAudit();
     },
     onError: (error) => setNotice(describeError(error))
@@ -370,9 +438,9 @@ export function AdminApp() {
 
   const runtimeMutation = useMutation({
     mutationFn: api.updateRuntimeSettings,
-    onSuccess: () => {
+    onSuccess: (result) => {
       setNotice("全局设置已保存。");
-      void queryClient.invalidateQueries({ queryKey: ["admin-runtime"] });
+      queryClient.setQueryData(["admin-runtime"], result);
       refreshAdminAudit();
     },
     onError: (error) => setNotice(describeError(error))
@@ -438,7 +506,10 @@ export function AdminApp() {
 
   const runNotificationsMutation = useMutation({
     mutationFn: api.runAdminNotifications,
-    onSuccess: (result) => setNotice(`通知扫描完成：发送 ${result.sent}，跳过 ${result.skipped}。`),
+    onSuccess: (result) => {
+      setNotice(`通知扫描完成：发送 ${result.sent}，跳过 ${result.skipped}。`);
+      void queryClient.invalidateQueries({ queryKey: ["admin-status"] });
+    },
     onError: (error) => setNotice(describeError(error))
   });
 
@@ -447,9 +518,9 @@ export function AdminApp() {
     onSuccess: (probe) => {
       setSelectedProbeId(probe.id);
       setNotice("实时性探测已开始，worker 会按设定间隔采样。");
-      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
       void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-rooms"] });
       refreshAdminAudit();
+      return queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
     },
     onError: (error) => setNotice(describeError(error))
   });
@@ -458,28 +529,25 @@ export function AdminApp() {
     mutationFn: api.stopAdminHwglProbe,
     onSuccess: () => {
       setNotice("实时性探测已停止。");
-      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probe"] });
       refreshAdminAudit();
+      return queryClient.invalidateQueries({ queryKey: ["admin-hwgl-probes"] });
     },
     onError: (error) => setNotice(describeError(error))
   });
 
-  if (!token) {
-    return <AdminLogin onLogin={handleLogin} />;
+  if (!meQuery.isSuccess) {
+    return <main className="app-background flex min-h-screen items-center justify-center p-4">
+      <section className="space-y-4 rounded-xl border border-border bg-panel p-6 text-sm">
+        {meQuery.isError ? <p role="alert">无法验证管理会话：{describeError(meQuery.error)}</p> : <p role="status">正在验证管理会话…</p>}
+        <div className="flex flex-wrap gap-2">
+          {meQuery.isError && <Button disabled={meQuery.isFetching} onClick={() => void meQuery.refetch()}>重试</Button>}
+          <Button variant="secondary" onClick={handleLogout}>返回登录</Button>
+        </div>
+      </section>
+    </main>;
   }
 
-  const nav: AdminNavItem[] = [
-    { key: "status", label: "状态", icon: <Server size={17} /> },
-    { key: "users", label: "用户", icon: <Users size={17} /> },
-    { key: "rooms", label: "宿舍", icon: <Building2 size={17} /> },
-    { key: "tokens", label: "Token", icon: <KeyRound size={17} /> },
-    { key: "smtp", label: "SMTP", icon: <Mail size={17} /> },
-    { key: "realtime", label: "实时性", icon: <Radio size={17} /> },
-    { key: "announcements", label: "公告", icon: <Megaphone size={17} /> },
-    { key: "settings", label: "设置", icon: <Database size={17} /> },
-    { key: "account", label: "账号", icon: <ShieldCheck size={17} /> },
-    { key: "audit", label: "审计", icon: <ScrollText size={17} /> }
-  ];
   const activeNav = nav.find((item) => item.key === activeView);
   const viewDescriptions: Record<AdminView, string> = {
     status: "掌握校园用电服务的运行全貌，让每一次查询与提醒可靠抵达。",
@@ -511,7 +579,7 @@ export function AdminApp() {
                 className={`mb-1 flex w-full items-center gap-3 border-l-2 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                   activeView === item.key ? "border-primary bg-primary/10 font-semibold text-primary" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
-                onClick={() => setActiveView(item.key)}
+                onClick={() => navigate(item.key)}
               >
                 <span aria-hidden="true">{item.icon}</span>
                 <span>{item.label === "状态" ? "运行概览" : item.label === "用户" ? "用户管理" : item.label === "宿舍" ? "宿舍管理" : item.label}</span>
@@ -536,16 +604,16 @@ export function AdminApp() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="mr-3 hidden text-xs text-muted-foreground xl:inline">山东大学 · 青岛校区</span>
-            <Button aria-label={darkMode ? "切换为浅色" : "切换为暗色"} size="icon" variant="ghost" onClick={() => setDarkMode((value) => !value)}>{darkMode ? <Sun size={17} /> : <Moon size={17} />}</Button>
+            <Button aria-label={darkMode ? "切换为浅色" : "切换为暗色"} size="icon" variant="ghost" onClick={toggleTheme}>{darkMode ? <Sun size={17} /> : <Moon size={17} />}</Button>
             <Button aria-label="退出管理后台" size="icon" variant="ghost" className="lg:hidden" onClick={handleLogout}><LogOut size={17} /></Button>
             <div className="hidden border-l border-border pl-4 text-sm text-muted-foreground lg:block">{meQuery.data?.display_name || meQuery.data?.username || "正在读取管理员"}</div>
           </div>
         </header>
 
-        <MobileAdminNav activeView={activeView} items={nav} onChange={setActiveView} />
+        <MobileAdminNav activeView={activeView} items={nav} onChange={navigate} />
 
         <main className="workspace-main mx-auto w-full max-w-[1560px] pb-28 lg:pb-10">
-          <NoticeDialog message={notice} onClose={() => setNotice(null)} />
+          <ActionNotice message={notice} onClose={() => setNotice(null)} />
           <div className="mb-7 grid gap-4 rounded-xl border border-border/70 bg-panel px-5 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
             <div><div className="eyebrow">管理工作区 / {String(nav.findIndex((item) => item.key === activeView) + 1).padStart(2, "0")}</div><h1 className="page-heading mt-2">{activeView === "status" ? "运行概览" : activeNav?.label}</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{viewDescriptions[activeView]}</p></div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck size={14} className="text-primary" />管理员专属</div>
@@ -553,6 +621,7 @@ export function AdminApp() {
           <div key={activeView} className="min-w-0">
           {activeView === "status" ? (
             <StatusPanel
+              api={api}
               onRunChecks={() => runChecksMutation.mutate()}
               onRunNotifications={() => runNotificationsMutation.mutate()}
               runningChecks={runChecksMutation.isPending}
@@ -562,9 +631,12 @@ export function AdminApp() {
 
           {activeView === "users" ? (
             <UsersPanel
+              listProblem={queryProblem("用户列表", usersQuery)}
+              detailProblem={queryProblem("用户详情", userDetailQuery)}
+              busy={updateManagedUserMutation.isPending || updateManagedUserRoomMutation.isPending || deleteManagedUserMutation.isPending || deleteManagedUserRoomMutation.isPending}
               pageData={usersQuery.data}
               query={userListQuery}
-              onQueryChange={setUserListQuery}
+              onQueryChange={(next) => { setUserListQuery(next); setSelectedUserId(null); }}
               detail={userDetailQuery.data}
               loading={usersQuery.isLoading}
               detailLoading={userDetailQuery.isLoading}
@@ -575,12 +647,12 @@ export function AdminApp() {
                 updateManagedUserRoomMutation.mutate({ userId, bindingId, payload })
               }
               onDeleteUser={(userId) => {
-                if (window.confirm("确定删除这个用户吗？该用户的宿舍绑定和通知记录也会被删除。")) {
+                if (window.confirm(`确定删除用户 ${userDetailQuery.data?.email ?? `#${userId}`} 吗？宿舍绑定和通知记录也将删除，无法撤销。`)) {
                   deleteManagedUserMutation.mutate(userId);
                 }
               }}
               onDeleteRoom={(userId, bindingId) => {
-                if (window.confirm("确定删除这个宿舍绑定吗？")) {
+                if (window.confirm(`确定删除用户 #${userId} 的宿舍绑定 #${bindingId} 吗？此操作无法撤销。`)) {
                   deleteManagedUserRoomMutation.mutate({ userId, bindingId });
                 }
               }}
@@ -589,13 +661,15 @@ export function AdminApp() {
 
           {activeView === "rooms" ? (
             <AdminRoomsPanel
+              api={api}
               pageData={adminRoomsQuery.data}
               query={roomListQuery}
               onQueryChange={setRoomListQuery}
               loading={adminRoomsQuery.isLoading}
-              deletingBindingId={deleteManagedUserRoomMutation.variables?.bindingId ?? null}
+              listProblem={queryProblem("宿舍列表", adminRoomsQuery)}
+              deletingBindingId={deleteManagedUserRoomMutation.isPending ? deleteManagedUserRoomMutation.variables.bindingId : null}
               onDeleteBinding={(userId, bindingId) => {
-                if (window.confirm("确定删除这个用户的宿舍绑定吗？")) {
+                if (window.confirm(`确定删除用户 #${userId} 的宿舍绑定 #${bindingId} 吗？此操作无法撤销。`)) {
                   deleteManagedUserRoomMutation.mutate({ userId, bindingId });
                 }
               }}
@@ -604,35 +678,42 @@ export function AdminApp() {
 
           {activeView === "tokens" ? (
             <TokenPanel
+              listProblem={queryProblem("Token 池", tokensQuery)}
+              logsProblem={queryProblem("Token 健康日志", tokenLogsQuery)}
               tokens={tokensQuery.data ?? []}
               logs={tokenLogsQuery.data ?? []}
               loading={tokensQuery.isLoading}
               logsLoading={tokenLogsQuery.isLoading}
               logFilters={tokenLogFilters}
               onLogFiltersChange={setTokenLogFilters}
-              saving={createTokenMutation.isPending}
-              onCreate={(payload) => createTokenMutation.mutate(payload)}
-              onUpdate={(id, payload) => updateTokenMutation.mutate({ id, payload })}
+              saving={createTokenMutation.isPending || updateTokenMutation.isPending || deleteTokenMutation.isPending || testTokenMutation.isPending}
+              onCreate={(payload, onSuccess) => createTokenMutation.mutate(payload, { onSuccess })}
+              onUpdate={(id, payload, onSuccess) => updateTokenMutation.mutate({ id, payload }, { onSuccess })}
               onTest={(id) => testTokenMutation.mutate(id)}
               onToggle={(item) => updateTokenMutation.mutate({ id: item.id, payload: { enabled: !item.enabled } })}
-              onDelete={(id) => deleteTokenMutation.mutate(id)}
-              testingTokenId={testTokenMutation.variables ?? null}
+              onDelete={(id) => {
+                if (window.confirm(`确定删除 Token「${tokensQuery.data?.find((item) => item.id === id)?.name ?? id}」吗？此操作无法撤销。`)) deleteTokenMutation.mutate(id);
+              }}
+              testingTokenId={testTokenMutation.isPending ? testTokenMutation.variables : null}
             />
           ) : null}
 
           {activeView === "smtp" ? (
             <SmtpPanel
+              listProblem={queryProblem("SMTP 池", smtpQuery)}
+              logsProblem={queryProblem("SMTP 健康日志", smtpLogsQuery)}
+              loading={smtpQuery.isLoading}
               accounts={smtpQuery.data ?? []}
               logs={smtpLogsQuery.data ?? []}
               logsLoading={smtpLogsQuery.isLoading}
               logFilters={smtpLogFilters}
               onLogFiltersChange={setSmtpLogFilters}
-              saving={createSmtpMutation.isPending}
-              testingSmtpId={smtpTestMutation.variables?.id ?? null}
-              onCreate={(payload) => createSmtpMutation.mutate(payload)}
-              onUpdate={(id, payload) => updateSmtpMutation.mutate({ id, payload })}
+              saving={createSmtpMutation.isPending || updateSmtpMutation.isPending || deleteSmtpMutation.isPending || smtpTestMutation.isPending}
+              testingSmtpId={smtpTestMutation.isPending ? smtpTestMutation.variables.id : null}
+              onCreate={(payload, onSuccess) => createSmtpMutation.mutate(payload, { onSuccess })}
+              onUpdate={(id, payload, onSuccess) => updateSmtpMutation.mutate({ id, payload }, { onSuccess })}
               onDelete={(id) => {
-                if (window.confirm("确定删除这个 SMTP 发件账号吗？")) {
+                if (window.confirm(`确定删除 SMTP 发件账号「${smtpQuery.data?.find((item) => item.id === id)?.name ?? id}」吗？此操作无法撤销。`)) {
                   deleteSmtpMutation.mutate(id);
                 }
               }}
@@ -642,21 +723,26 @@ export function AdminApp() {
 
           {activeView === "announcements" ? (
             <AnnouncementsPanel
+              listProblem={queryProblem("公告列表", announcementsQuery)}
               announcements={announcementsQuery.data ?? []}
               loading={announcementsQuery.isLoading}
-              saving={createAnnouncementMutation.isPending || updateAnnouncementMutation.isPending}
-              onCreate={(payload) => createAnnouncementMutation.mutate(payload)}
-              onUpdate={(id, payload) => updateAnnouncementMutation.mutate({ id, payload })}
+              saving={createAnnouncementMutation.isPending || updateAnnouncementMutation.isPending || deleteAnnouncementMutation.isPending}
+              onCreate={(payload, onSuccess) => createAnnouncementMutation.mutate(payload, { onSuccess })}
+              onUpdate={(id, payload, onSuccess) => updateAnnouncementMutation.mutate({ id, payload }, { onSuccess })}
               onDelete={(id) => {
-                if (window.confirm("确定删除这条公告吗？")) {
+                if (window.confirm(`确定删除公告「${announcementsQuery.data?.find((item) => item.id === id)?.title ?? id}」吗？此操作无法撤销。`)) {
                   deleteAnnouncementMutation.mutate(id);
                 }
               }}
             />
           ) : null}
 
-          {activeView === "realtime" ? (
+          {activeView === "realtime" && <div className="space-y-4">
+            {queryProblem("探测参数", runtimeQuery)}
+            {queryProblem("探测宿舍", hwglRoomsQuery)}
             <HwglProbePanel
+              detailProblem={queryProblem("探测详情", hwglProbeDetailQuery)}
+              listProblem={queryProblem("探测任务", hwglProbesQuery)}
               rooms={hwglRoomsQuery.data ?? []}
               probes={hwglProbesQuery.data ?? []}
               selectedProbe={hwglProbeDetailQuery.data}
@@ -665,33 +751,38 @@ export function AdminApp() {
               probesLoading={hwglProbesQuery.isLoading}
               detailLoading={hwglProbeDetailQuery.isLoading}
               creating={createHwglProbeMutation.isPending}
+              unavailable={!runtimeQuery.isSuccess || !hwglProbesQuery.isSuccess}
               stopping={stopHwglProbeMutation.isPending}
               onSelectProbe={setSelectedProbeId}
               maxDurationSeconds={runtimeQuery.data?.hwgl_probe_max_duration_seconds}
               onCreate={(payload) => createHwglProbeMutation.mutate(payload)}
               onStop={(probeId) => {
-                if (window.confirm("确定停止当前实时性探测吗？已经保存的样本会保留。")) {
+                if (window.confirm(`确定停止探测 #${probeId} 吗？已保存的样本会保留。`)) {
                   stopHwglProbeMutation.mutate(probeId);
                 }
               }}
             />
-          ) : null}
+          </div>}
 
-          {activeView === "settings" ? (
+          {activeView === "settings" && <div className="space-y-4">
+            {queryProblem("运行设置", runtimeQuery)}
+            {queryProblem("外观设置", appearanceQuery)}
+            {runtimeQuery.data && appearanceQuery.data ? (
             <RuntimeSettingsPanel
               runtime={runtimeQuery.data}
               appearance={appearanceQuery.data}
               saving={runtimeMutation.isPending}
               savingAppearance={appearanceMutation.isPending}
-              onSave={(payload) => runtimeMutation.mutate(payload)}
-              onSaveAppearance={(payload) => appearanceMutation.mutate(payload)}
+              onSave={(payload, onSuccess) => runtimeMutation.mutate(payload, { onSuccess })}
+              onSaveAppearance={(payload, onSuccess) => appearanceMutation.mutate(payload, { onSuccess })}
               onUploadAppearanceBackground={(theme, file) => appearanceUploadMutation.mutateAsync({ theme, file })}
               onRunDataRetentionCleanup={() => dataRetentionCleanupMutation.mutate()}
               cleaningRetention={dataRetentionCleanupMutation.isPending}
               onClearRateLimits={(payload) => clearRateLimitsMutation.mutate(payload)}
               clearingRateLimits={clearRateLimitsMutation.isPending}
             />
-          ) : null}
+            ) : !runtimeQuery.isError && !appearanceQuery.isError ? <div role="status" className="p-6 text-sm text-muted-foreground">正在读取全局设置…</div> : null}
+          </div>}
 
           {activeView === "account" ? (
             <AccountPanel
@@ -705,6 +796,7 @@ export function AdminApp() {
 
           {activeView === "audit" ? (
             <AuditPanel
+              listProblem={queryProblem("审计日志", auditLogsQuery)}
               logs={(auditLogsQuery.data ?? []) as AdminAuditLog[]}
               loading={auditLogsQuery.isLoading}
               filters={auditLogFilters}

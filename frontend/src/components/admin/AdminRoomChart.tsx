@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign, Receipt, X } from "lucide-react";
 
-import { createApiClient } from "../../lib/api";
+import type { ApiClient } from "../../lib/api";
 import type { AdminRoom } from "../../lib/types";
 import { formatDateTime, formatKwh } from "../../lib/utils";
 import { EmptyState } from "../EmptyState";
@@ -10,7 +10,6 @@ import { PowerChart } from "../PowerChart";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Skeleton } from "../ui/skeleton";
-import { ADMIN_TOKEN_KEY } from "./utils";
 
 type RoomChartRange = "1d" | "7d" | "30d" | "all";
 
@@ -40,9 +39,8 @@ function formatPrice(value?: string | null) {
   return Number.isFinite(number) ? `¥${number.toFixed(4)} / 度` : "--";
 }
 
-export function AdminRoomChart({ room, onClose }: { room: AdminRoom; onClose: () => void }) {
+export function AdminRoomChart({ room, api, onClose }: { room: AdminRoom; api: ApiClient; onClose: () => void }) {
   const [range, setRange] = useState<RoomChartRange>("7d");
-  const api = useMemo(() => createApiClient(window.localStorage.getItem(ADMIN_TOKEN_KEY)), []);
   const readingsQuery = useQuery({
     queryKey: ["admin-room-readings", room.room.id, range],
     queryFn: () => api.listAdminRoomReadings(room.room.id, rangeParams(range)),
@@ -74,6 +72,7 @@ export function AdminRoomChart({ room, onClose }: { room: AdminRoom; onClose: ()
             <Button
               key={item.key}
               size="sm"
+              aria-pressed={range === item.key}
               variant={range === item.key ? "primary" : "secondary"}
               onClick={() => setRange(item.key)}
             >
@@ -87,7 +86,7 @@ export function AdminRoomChart({ room, onClose }: { room: AdminRoom; onClose: ()
             <Skeleton className="h-[280px] w-full rounded-xl" />
           </div>
         ) : readingsQuery.isError ? (
-          <EmptyState className="min-h-[260px]" title="曲线读取失败" description="请稍后重试，或检查后端服务日志。" />
+          <div role="alert" className="space-y-2 py-6 text-center text-sm"><p>曲线读取失败。</p><Button disabled={readingsQuery.isFetching} variant="secondary" onClick={() => void readingsQuery.refetch()}>重试</Button></div>
         ) : readingsQuery.data?.length ? (
           <PowerChart readings={readingsQuery.data} recharges={room.recent_recharges} />
         ) : (

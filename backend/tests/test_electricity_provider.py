@@ -1,7 +1,9 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.electricity.client import ElectricityQueryResult
+import pytest
+
+from app.electricity.client import CampusElectricityClient, ElectricityQueryResult
 from app.electricity.provider import provider_requires_token, query_electricity
 from app.models.room import Room
 from app.services import electricity_queries
@@ -73,3 +75,17 @@ def test_query_service_records_health_only_for_mcard(monkeypatch) -> None:
 
     assert execution.auth_token_id == 9
     assert health_calls and health_calls[0][0] == (9,)
+
+
+@pytest.mark.parametrize("payload,balance", [
+    ({"code": 200, "map": {"showData": {"信息": "剩余 -3.75 度"}}}, Decimal("-3.75")),
+    ([], None),
+    ({"code": 200, "map": None}, None),
+    ({"code": 200, "map": {"showData": {"信息": "1.2.3 度"}}}, None),
+])
+def test_mcard_signed_balance_and_invalid_data(payload, balance) -> None:
+    http = SimpleNamespace(post=lambda *args, **kwargs: SimpleNamespace(status_code=200, json=lambda: payload))
+    result = CampusElectricityClient("test-token", http_client=http).query_room(make_room("mcard"))
+    assert result.balance == balance
+    assert result.success is (balance is not None)
+    assert result.error_kind == (None if result.success else "parse")

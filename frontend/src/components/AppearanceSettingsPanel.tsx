@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Palette, Save, X } from "lucide-react";
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   applyAppearanceSettings,
+  applyStoredAppearanceSettings,
   normalizeAppearanceSettings,
   saveAppearanceSettings
 } from "../lib/appearance";
@@ -84,78 +85,71 @@ export function AppearanceSettingsPanel({
   onSave,
   onUploadBackground
 }: {
-  appearance?: AppearanceSettings | null;
+  appearance: AppearanceSettings;
   saving: boolean;
-  onSave: (payload: Partial<AppearanceSettings>) => void;
-  onUploadBackground?: (
+  onSave: (payload: Partial<AppearanceSettings>, onSuccess: () => void) => void;
+  onUploadBackground: (
     theme: "light" | "dark",
     file: File
   ) => Promise<{ theme: "light" | "dark"; url: string; blurred_url: string }>;
 }) {
-  const [appearanceForm, setAppearanceForm] = useState<AppearanceSettings>(() => normalizeAppearanceSettings(appearance));
-  const [dirty, setDirty] = useState(false);
+  const saved = useMemo(() => normalizeAppearanceSettings(appearance), [appearance]);
+  const [draft, setDraft] = useState<AppearanceSettings | null>(null);
+  const appearanceForm = draft ?? saved;
+  const dirty = draft !== null;
   const [uploadingTheme, setUploadingTheme] = useState<"light" | "dark" | null>(null);
+  const busy = saving || uploadingTheme !== null;
 
-  useEffect(() => {
-    if (appearance) {
-      const normalized = normalizeAppearanceSettings(appearance);
-      setAppearanceForm(normalized);
-      saveAppearanceSettings(normalized);
-      setDirty(false);
-    }
-  }, [appearance]);
+  useEffect(() => { saveAppearanceSettings(saved); }, [saved]);
+  useEffect(() => () => applyStoredAppearanceSettings(), []);
 
   useEffect(() => {
     applyAppearanceSettings(appearanceForm);
-  }, [appearanceForm]);
+  }, [appearanceForm, saved]);
 
   function setAppearanceValue<K extends keyof AppearanceSettings>(key: K, value: AppearanceSettings[K]) {
-    setDirty(true);
-    setAppearanceForm((current) => ({ ...current, [key]: value }));
+    setDraft((current) => ({ ...(current ?? saved), [key]: value }));
   }
 
   function setAppearanceNumber(key: AppearanceNumberSettingKey, value: string) {
-    setDirty(true);
-    setAppearanceForm((current) => ({ ...current, [key]: Number(value) }));
+    setAppearanceValue(key, Number(value));
   }
 
   function saveGlobal() {
-    const next = saveAppearanceSettings(appearanceForm);
-    setAppearanceForm(next);
-    setDirty(false);
-    onSave(next);
+    onSave(normalizeAppearanceSettings(appearanceForm), () => setDraft(null));
   }
 
   function resetGlobal() {
-    setAppearanceForm(DEFAULT_APPEARANCE_SETTINGS);
-    saveAppearanceSettings(DEFAULT_APPEARANCE_SETTINGS);
-    setDirty(false);
-    onSave(DEFAULT_APPEARANCE_SETTINGS);
+    setDraft({ ...DEFAULT_APPEARANCE_SETTINGS });
   }
 
   function selectGlassMode(mode: AppearanceSettings["glass_effect_mode"]) {
-    setDirty(true);
-    setAppearanceForm((current) => ({ ...current, glass_effect_mode: mode, ...glassModeDefaults[mode] }));
+    setDraft((current) => ({ ...(current ?? saved), glass_effect_mode: mode, ...glassModeDefaults[mode] }));
   }
 
   function applyGlassPreset(values: AppearanceTuning) {
-    setDirty(true);
-    setAppearanceForm((current) => ({ ...current, ...values }));
+    setDraft((current) => ({ ...(current ?? saved), ...values }));
+  }
+
+  function setBackground(theme: "light" | "dark", url: string | null, blurred: string | null) {
+    setDraft((current) => {
+      const base = current ?? saved;
+      if (theme === "dark") return { ...base, dark_background_image_url: url, dark_background_blurred_url: blurred };
+      return { ...base, background_image_url: url, light_background_image_url: url, light_background_blurred_url: blurred,
+        dark_background_blurred_url: base.dark_background_image_url ? base.dark_background_blurred_url : null };
+    });
   }
 
   async function uploadBackground(theme: "light" | "dark", file?: File) {
-    if (!file || !onUploadBackground) {
+    if (!file || busy) {
       return;
     }
     setUploadingTheme(theme);
     try {
       const result = await onUploadBackground(theme, file);
-      setDirty(true);
-      setAppearanceForm((current) => ({
-        ...current,
-        [theme === "light" ? "light_background_image_url" : "dark_background_image_url"]: result.url,
-        [theme === "light" ? "light_background_blurred_url" : "dark_background_blurred_url"]: result.blurred_url
-      }));
+      setBackground(theme, result.url, result.blurred_url);
+    } catch {
+      // The upload mutation reports the server error; leave the draft unchanged.
     } finally {
       setUploadingTheme(null);
     }
@@ -193,31 +187,28 @@ export function AppearanceSettingsPanel({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle>前端外观</CardTitle>
-            <Badge tone={dirty ? "warning" : "success"}>{dirty ? "预览中" : "全局配置"}</Badge>
+            <Badge tone={dirty ? "warning" : "success"}>{dirty ? "未保存预览" : "全局配置"}</Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">管理员统一设置登录页、用户端和管理后台的背景与玻璃卡片参数。</p>
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
-          <div className="grid gap-4">
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
+          <fieldset aria-label="外观设置" disabled={busy} aria-busy={busy} className="grid min-w-0 gap-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <Label htmlFor="appearance-light-bg-url">亮色背景图</Label>
                 <Input
                   id="appearance-light-bg-url"
                   value={appearanceForm.light_background_image_url ?? ""}
-                  onChange={(event) => {
-                    setAppearanceValue("light_background_image_url", event.target.value || null);
-                    setAppearanceValue("light_background_blurred_url", null);
-                  }}
+                  onChange={(event) => setBackground("light", event.target.value || null, null)}
                   placeholder="https://example.com/light.jpg 或 /uploads/..."
                 />
                 <Input
                   className="mt-2"
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/avif"
-                  disabled={uploadingTheme === "light"}
+                  aria-label="上传亮色背景图"
                   onChange={(event) => {
                     void uploadBackground("light", event.currentTarget.files?.[0]);
                     event.currentTarget.value = "";
@@ -229,17 +220,14 @@ export function AppearanceSettingsPanel({
                 <Input
                   id="appearance-dark-bg-url"
                   value={appearanceForm.dark_background_image_url ?? ""}
-                  onChange={(event) => {
-                    setAppearanceValue("dark_background_image_url", event.target.value || null);
-                    setAppearanceValue("dark_background_blurred_url", null);
-                  }}
+                  onChange={(event) => setBackground("dark", event.target.value || null, null)}
                   placeholder="https://example.com/dark.jpg 或 /uploads/..."
                 />
                 <Input
                   className="mt-2"
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/avif"
-                  disabled={uploadingTheme === "dark"}
+                  aria-label="上传暗色背景图"
                   onChange={(event) => {
                     void uploadBackground("dark", event.currentTarget.files?.[0]);
                     event.currentTarget.value = "";
@@ -256,6 +244,7 @@ export function AppearanceSettingsPanel({
                     key={item.key}
                     size="sm"
                     variant={appearanceForm.background_position === item.key ? "primary" : "secondary"}
+                    aria-pressed={appearanceForm.background_position === item.key}
                     onClick={() => setAppearanceValue("background_position", item.key)}
                     type="button"
                   >
@@ -380,16 +369,17 @@ export function AppearanceSettingsPanel({
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button disabled={saving} onClick={saveGlobal} type="button">
+              <Button disabled={!dirty || busy} onClick={saveGlobal} type="button">
                 <Save size={16} />
                 保存全局外观
               </Button>
               <Button disabled={saving} onClick={resetGlobal} type="button" variant="secondary">
                 <X size={16} />
-                恢复默认
+                预览默认外观
               </Button>
+              {dirty && <Button variant="ghost" type="button" onClick={() => setDraft(null)}>放弃预览</Button>}
             </div>
-          </div>
+          </fieldset>
 
           <div className="grid gap-3">
             <div>

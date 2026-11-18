@@ -3,13 +3,20 @@ import { formatDateTime, formatKwh } from "./utils";
 
 const sourceLabels: Record<string, string> = {
   user: "手动",
+  manual: "手动",
+  background: "后台自动",
   worker: "自动",
   admin: "管理",
   cli: "命令行"
 };
 
 export function formatCheckSource(source: string) {
-  return sourceLabels[source] ?? source;
+  return Object.prototype.hasOwnProperty.call(sourceLabels, source) ? sourceLabels[source] : source;
+}
+
+export function describeCheckAttempt(attempt: CheckAttempt) {
+  if (attempt.success) return attempt.reading_id != null ? "已保存读数" : "查询成功";
+  return attempt.error_msg || attempt.error_kind || "未知错误";
 }
 
 export function buildRecordsCsv(attempts: CheckAttempt[]) {
@@ -21,13 +28,15 @@ export function buildRecordsCsv(attempts: CheckAttempt[]) {
       formatCheckSource(attempt.source),
       attempt.success ? formatKwh(attempt.balance) : "--",
       attempt.success ? "成功" : "失败",
-      attempt.success ? "已保存读数" : attempt.error_msg ?? attempt.error_kind ?? "未知错误"
+      describeCheckAttempt(attempt)
     ])
   ];
 
   function csvCell(value: unknown) {
     const text = String(value ?? "");
-    const protectedText = /^[=+\-@]/.test(text) ? `'${text}` : text;
+    // Quoting alone doesn't prevent spreadsheet formulas. Some importers strip
+    // leading whitespace/control characters before interpreting a cell.
+    const protectedText = /^(?:[\t\r\n]|[\s\u0000-\u001f]*[=+@＝＋－＠-])/.test(text) ? `'${text}` : text;
     return `"${protectedText.replace(/"/g, '""')}"`;
   }
 

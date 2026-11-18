@@ -36,7 +36,7 @@ import type {
   AnnouncementVisibility,
 } from "./types";
 
-const API_BASE_URL =
+export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   (import.meta.env.DEV ? "http://127.0.0.1:8000" : window.location.origin);
 
@@ -65,31 +65,29 @@ function validationMessage(detail: unknown) {
   if (!Array.isArray(detail)) {
     return null;
   }
-  const first = detail[0] as { loc?: unknown[]; msg?: string; type?: string; ctx?: { min_length?: number } } | undefined;
+  const first = detail[0] as { loc?: unknown[]; type?: string } | undefined;
   const field = Array.isArray(first?.loc) ? String(first.loc[first.loc.length - 1]) : "";
   if (field === "code") {
-    return "验证码至少需要 4 位，请检查后再提交。";
+    return "请输入邮件中的 6 位数字验证码。";
   }
-  if (field === "password") {
-    return "密码至少需要 8 位。";
+  if (field === "password" || field === "new_password" || field === "old_password") {
+    if (first?.type === "string_too_long") return "密码不能超过 128 个字符。";
+    return first?.type === "string_too_short" && field !== "old_password"
+      ? "密码长度不符合要求，请检查后再试。" : "请输入有效密码。";
   }
   if (field === "email") {
     return "请输入有效的邮箱地址。";
-  }
-  if (first?.type === "string_too_short" && first.ctx?.min_length) {
-    return `输入内容至少需要 ${first.ctx.min_length} 个字符。`;
   }
   return "提交内容格式不正确，请检查后再试。";
 }
 
 export function getApiErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
-    if (error.status >= 500) {
-      return "服务器暂时处理失败，请稍后再试。";
-    }
-    if (error.status === 422) {
-      return validationMessage(error.detail) ?? "提交内容格式不正确，请检查后再试。";
-    }
+    if (typeof error.detail === "object" && error.detail && "kind" in error.detail &&
+        ["room_check_unavailable", "room_check_failed", "room_not_found"].includes(String(error.detail.kind)) &&
+        "message" in error.detail && typeof error.detail.message === "string") return error.detail.message;
+    if (error.status >= 500) return "服务器暂时处理失败，请稍后再试。";
+    if (error.status === 422 && Array.isArray(error.detail)) return validationMessage(error.detail)!;
     if (typeof error.detail === "string") {
       const messages: Record<string, string> = {
         "invalid email": "请输入有效的邮箱地址。",
@@ -97,6 +95,11 @@ export function getApiErrorMessage(error: unknown) {
         "invalid email or password": "邮箱或密码不正确。",
         "email not verified": "这个邮箱还没有完成验证，请先完成邮箱验证。",
         "invalid or expired verification code": "验证码错误或已过期，请重新获取后再试。",
+        "old password is incorrect": "原密码不正确。",
+        "current password is incorrect": "当前密码不正确。",
+        "password is incorrect": "密码不正确。",
+        "new password must be different": "新密码不能与原密码相同。",
+        "invalid username or password": "用户名或密码不正确。",
         "registration code is no longer valid": "注册验证码已失效，请重新注册。",
         "room already bound": "这个宿舍已经绑定过了。"
       };
@@ -106,6 +109,10 @@ export function getApiErrorMessage(error: unknown) {
       const detail = error.detail as { kind?: string; message?: string; retry_after_seconds?: number };
       if (detail.kind === "rate_limited") {
         return `操作太频繁了，请 ${formatSeconds(Number(detail.retry_after_seconds))}再试。`;
+      }
+      if (detail.kind === "manual_check_cooldown" || detail.kind === "test_email_cooldown") {
+        const label = detail.kind === "manual_check_cooldown" ? "手动同步" : "测试邮件";
+        return `${label}冷却中，请${formatSeconds(Number(detail.retry_after_seconds))}再试。`;
       }
       if (detail.kind === "verification_email_cooldown") {
         return `验证码刚刚发送过，请 ${formatSeconds(Number(detail.retry_after_seconds))}再试。`;
@@ -304,7 +311,7 @@ export interface ApiClient {
   clearAdminRateLimits: (payload: { bucket?: string | null; client_ip?: string | null; identity?: string | null }) => Promise<{ cleared_keys: number }>;
 }
 
-async function request<T>(path: string, options: RequestInit = {}, token?: string | null): Promise<T> {
+async function sendRequest<T>(path: string, options: RequestInit, token?: string | null): Promise<T> {
   const headers = new Headers(options.headers);
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -346,7 +353,15 @@ function buildQuery(params?: Record<string, string | number | undefined | null>)
   return text ? `?${text}` : "";
 }
 
-export function createApiClient(token?: string | null): ApiClient {
+export function createApiClient(token?: string | null, onUnauthorized?: () => void): ApiClient {
+  async function request<T>(path: string, options: RequestInit = {}, bearer?: string | null) {
+    try {
+      return await sendRequest<T>(path, options, bearer);
+    } catch (error) {
+      if (bearer && error instanceof ApiError && error.status === 401) onUnauthorized?.();
+      throw error;
+    }
+  }
   return {
     getMe: () => request<User>("/api/auth/me", {}, token),
     listBuildings: () => request<Building[]>("/api/buildings", {}, token),

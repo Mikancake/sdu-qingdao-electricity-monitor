@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal
 from uuid import uuid4
 
@@ -46,7 +47,6 @@ def patch_admin_appearance_settings(
     db: Session = Depends(db_session),
 ) -> AppearanceSettingsOut:
     previous = get_appearance_settings(db)
-    appearance = update_appearance_settings(db, payload.model_dump(exclude_unset=True))
     audit(
         db,
         admin,
@@ -55,7 +55,7 @@ def patch_admin_appearance_settings(
         "appearance_settings",
         {"fields": list(payload.model_fields_set)},
     )
-    db.commit()
+    appearance = update_appearance_settings(db, payload.model_dump(exclude_unset=True))
     _remove_unreferenced_appearance_files(previous, appearance)
     return appearance
 
@@ -73,32 +73,32 @@ async def upload_appearance_background(
 
     upload_root = Path(settings.upload_dir) / "appearance"
     upload_root.mkdir(parents=True, exist_ok=True)
-    source_filename = f"{theme}-{uuid4().hex}{suffix}"
     filename = f"{theme}-{uuid4().hex}.webp"
     blurred_filename = f"{theme}-{uuid4().hex}-blurred.webp"
-    source_target = upload_root / source_filename
     target = upload_root / filename
     blurred_target = upload_root / blurred_filename
 
     written = 0
     try:
-        with source_target.open("wb") as handle:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > settings.appearance_upload_max_bytes:
-                    raise HTTPException(status_code=413, detail="image is too large")
-                handle.write(chunk)
-        await run_in_threadpool(build_optimized_background, source_target, target)
-        await run_in_threadpool(build_preblurred_background, source_target, blurred_target)
+        # Only processed assets belong under the public StaticFiles mount.
+        with TemporaryDirectory() as staging:
+            source_target = Path(staging) / f"original{suffix}"
+            with source_target.open("wb") as handle:
+                while chunk := await file.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > settings.appearance_upload_max_bytes:
+                        raise HTTPException(status_code=413, detail="image is too large")
+                    handle.write(chunk)
+            await run_in_threadpool(build_optimized_background, source_target, target)
+            await run_in_threadpool(build_preblurred_background, source_target, blurred_target)
     except InvalidAppearanceImage as exc:
-        _remove_uploads(source_target, target, blurred_target)
+        _remove_uploads(target, blurred_target)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
-        _remove_uploads(source_target, target, blurred_target)
+        _remove_uploads(target, blurred_target)
         raise
     finally:
         await file.close()
-        _remove_uploads(source_target)
 
     url = f"/uploads/appearance/{filename}"
     blurred_url = f"/uploads/appearance/{blurred_filename}"
@@ -110,7 +110,11 @@ async def upload_appearance_background(
         "appearance_settings",
         {"theme": theme, "url": url, "blurred_url": blurred_url},
     )
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        _remove_uploads(target, blurred_target)
+        raise
     return AppearanceBackgroundUploadOut(theme=theme, url=url, blurred_url=blurred_url)
 
 
@@ -124,12 +128,11 @@ def _remove_unreferenced_appearance_files(
     previous: AppearanceSettingsOut,
     current: AppearanceSettingsOut,
 ) -> None:
-    previous_urls = {getattr(previous, field) for field in APPEARANCE_URL_FIELDS}
-    current_urls = {getattr(current, field) for field in APPEARANCE_URL_FIELDS}
-    for url in previous_urls - current_urls:
-        path = _local_appearance_path(url)
-        if path is None:
-            continue
+    # Distinct URLs (query strings, fragments or theme aliases) may refer
+    # to the same file. Only unlink paths no longer used by any field.
+    previous_paths = {_local_appearance_path(getattr(previous, field)) for field in APPEARANCE_URL_FIELDS}
+    current_paths = {_local_appearance_path(getattr(current, field)) for field in APPEARANCE_URL_FIELDS}
+    for path in previous_paths - current_paths - {None}:
         try:
             path.unlink(missing_ok=True)
         except OSError:

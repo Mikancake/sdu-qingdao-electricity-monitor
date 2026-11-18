@@ -159,6 +159,16 @@ function TrendChart({
           <div className="admin-chart-empty">暂无趋势数据</div>
         )}
       </div>
+      {points.length > 0 && (
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="cursor-pointer py-2">查看每日数值</summary>
+          <table className="mt-2 w-full text-left tabular-nums">
+            <caption className="sr-only">{title}每日数值</caption>
+            <thead><tr><th scope="col">日期</th>{series.map((item) => <th scope="col" key={item.key}>{item.label}</th>)}</tr></thead>
+            <tbody>{points.map((point) => <tr key={point.day}><th scope="row" className="py-1 font-normal">{point.day}</th>{series.map((item) => <td key={item.key}>{point.values[item.key] ?? 0}</td>)}</tr>)}</tbody>
+          </table>
+        </details>
+      )}
     </div>
   );
 }
@@ -231,7 +241,7 @@ export const BuildingStatsChart = memo(function BuildingStatsChart({ buildings }
         <div className="admin-building-chart admin-chart-list scrollbar-thin">
           {buildings.map((item, index) => (
             <div key={`${item.campus}-${item.building_key ?? item.building_name}`} className="admin-building-row">
-              <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{item.building_name}</div>
                   <div className="mt-1 text-xs text-muted-foreground">

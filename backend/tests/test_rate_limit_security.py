@@ -1,7 +1,10 @@
 from starlette.requests import Request
 
 from app.core.config import settings
-from app.services.rate_limit import InMemoryRateLimiter, _trusted_proxy_networks, account_rate_limit_key, get_client_ip
+from app.services.rate_limit import (
+    InMemoryRateLimiter, _trusted_proxy_networks, account_rate_limit_key,
+    client_rate_limit_key, get_client_ip, rate_limit_key,
+)
 
 
 def make_request(client_ip: str, **headers: str) -> Request:
@@ -62,3 +65,26 @@ def test_rate_limiter_caps_unique_keys() -> None:
 
     assert len(test_limiter._events) == 2
     assert "third" in test_limiter._events
+
+
+def test_clear_limits_matches_whole_ip_account_and_bucket() -> None:
+    limiter = InMemoryRateLimiter()
+    a = make_request("192.0.2.1")
+    b = make_request("192.0.2.10")
+    v6 = make_request("2001:db8::1")
+    bucket = "me:manual-check"
+    for key in (
+        rate_limit_key(a, bucket, 12, 3), rate_limit_key(b, bucket, 12, 3),
+        rate_limit_key(a, bucket, 123, 12), client_rate_limit_key(a, bucket),
+        rate_limit_key(a, "me:manual-check:other", 12),
+        rate_limit_key(v6, bucket, 12), account_rate_limit_key(bucket, "a:b/c"),
+    ):
+        limiter.hit(key, limit=1, window_seconds=60)
+
+    assert limiter.clear_matching(bucket=bucket, client_ip="192.0.2.1", identity="12") == 1
+    assert limiter.clear_matching(bucket=bucket, client_ip="2001:0db8::1") == 1
+    assert limiter.clear_matching(bucket=bucket, identity="A:B/C") == 1
+    assert set(limiter._events) == {
+        rate_limit_key(b, bucket, 12, 3), rate_limit_key(a, bucket, 123, 12),
+        client_rate_limit_key(a, bucket), rate_limit_key(a, "me:manual-check:other", 12),
+    }

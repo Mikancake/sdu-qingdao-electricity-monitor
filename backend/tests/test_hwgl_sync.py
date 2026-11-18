@@ -1,8 +1,10 @@
-from datetime import date, datetime, timezone
+from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models  # noqa: F401
 from app.db.base import Base
@@ -11,6 +13,10 @@ from app.electricity.hwgl_client import HwglPriceRecord, HwglRechargeRecord
 from app.models.electricity_reading import ElectricityReading
 from app.models.electricity_recharge import ElectricityRecharge
 from app.models.room import Room
+from app.models.user import User
+from app.models.user_room import UserRoom
+from app.services import hwgl_sync
+from app.services.runtime_settings import update_runtime_config
 from app.services.hwgl_sync import sync_hwgl_room
 
 
@@ -33,7 +39,7 @@ class FakeMetadataClient:
         success=True,
         balance=Decimal("23.50"),
         provider="hwgl",
-        provider_updated_at=datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc),
+        provider_updated_at=datetime(2026, 8, 28, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
         reported_daily_usage=Decimal("4.35"),
         reported_usage_date=date(2026, 8, 27),
         power_status="正常供电",
@@ -58,13 +64,13 @@ class FakeMetadataClient:
             HwglRechargeRecord(
                 external_id_hash="a" * 64,
                 external_id_tail="123456",
-                paid_at=datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
+                paid_at=datetime(2026, 8, 27, 9, tzinfo=ZoneInfo("Asia/Shanghai")),
                 amount=Decimal("30"),
                 line_type="照明",
                 payment_status="已支付",
                 processing_status="已入账",
             )
-        ]
+        ] * 2  # The upstream may return the same order twice on a page.
 
 
 def test_hwgl_metadata_sync_upserts_daily_data_price_and_recharges_idempotently() -> None:
@@ -107,3 +113,39 @@ def test_hwgl_metadata_sync_upserts_daily_data_price_and_recharges_idempotently(
         assert room.provider_room_key == "fake-room-key"
         assert room.provider_line_id == "10"
         assert room.provider_price == Decimal("0.52")
+
+        client = FakeMetadataClient()
+        client.daily_result = replace(client.daily_result, balance=Decimal("20.00"),
+                                      provider_updated_at=client.daily_result.provider_updated_at + timedelta(minutes=5))
+        third = sync_hwgl_room(db, room, client=client, history_days=3, recharge_days=30)
+        assert third.daily_readings_upserted == 1
+        db.refresh(readings[0])
+        assert readings[0].balance == Decimal("20.00")
+
+
+def test_worker_metadata_sync_uses_saved_history_windows(monkeypatch) -> None:
+    now = datetime(2026, 8, 28, 23, tzinfo=timezone.utc)
+    calls = []
+
+    class Client(FakeMetadataClient):
+        def query_daily_records(self, room, start_date, end_date):
+            calls.append((start_date, end_date))
+            return []
+
+        def query_recharges(self, room, *, start_at, end_at):
+            calls.append((start_at, end_at))
+            return []
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(hwgl_sync, "_now", lambda: now)
+    monkeypatch.setattr(hwgl_sync, "SessionLocal", factory)
+    monkeypatch.setattr(hwgl_sync, "HwglElectricityClient", Client)
+    with factory() as db:
+        user = User(email="test@example.com", password_hash="test", is_verified=True)
+        db.add(UserRoom(room=_room(), user=user))
+        update_runtime_config(db, {"hwgl_metadata_history_days": 2, "hwgl_recharge_history_days": 7})
+    summary = hwgl_sync.run_hwgl_metadata_sync(delay_seconds=0)
+    assert summary.rooms_succeeded == 1
+    assert calls == [(date(2026, 8, 28), date(2026, 8, 29)), (now - timedelta(days=7), now)]

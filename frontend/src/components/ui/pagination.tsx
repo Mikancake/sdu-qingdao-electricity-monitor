@@ -28,7 +28,7 @@ export function PaginationControls({
           每页
           <select
             aria-label="每页条数"
-            className="glass-control app-input-motion h-11 rounded-md border border-border/75 bg-panel/70 px-2 text-xs outline-none md:h-8"
+            className="glass-control app-input-motion h-11 rounded-md border border-border/75 bg-panel/70 px-2 text-xs focus-visible:outline-primary md:h-8"
             value={pageSize}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
           >

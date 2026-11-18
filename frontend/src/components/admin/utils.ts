@@ -1,4 +1,4 @@
-import { ApiError, getApiErrorMessage } from "../../lib/api";
+import { getApiErrorMessage } from "../../lib/api";
 import type { AdminLogQuery } from "../../lib/types";
 
 
@@ -40,21 +40,7 @@ export function compareDate(a?: string | null, b?: string | null, direction: Sor
   return direction === "asc" ? result : -result;
 }
 
-export function describeError(error: unknown) {
-  if (error instanceof ApiError) {
-    if (error.status >= 500) {
-      return "服务器处理失败，请稍后再试。";
-    }
-    if (typeof error.detail === "string") {
-      return error.detail;
-    }
-    return getApiErrorMessage(error);
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "操作失败，请稍后再试。";
-}
+export const describeError = getApiErrorMessage;
 
 export function healthTone(status?: string | null): "success" | "warning" | "danger" | "muted" {
   if (status === "healthy") return "success";

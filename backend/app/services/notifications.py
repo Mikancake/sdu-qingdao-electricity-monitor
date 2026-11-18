@@ -45,12 +45,11 @@ class EmailContent:
 
 
 def _effective_notify_cooldown_hours(db, binding: UserRoom) -> int:
-    runtime = get_runtime_config(db)
     if binding.notify_cooldown_hours is not None:
         return binding.notify_cooldown_hours
     if binding.user is not None and binding.user.notify_cooldown_hours is not None:
         return binding.user.notify_cooldown_hours
-    return runtime.notify_cooldown_hours
+    return get_runtime_config(db).notify_cooldown_hours
 
 
 def _recent_notification_exists(db, binding: UserRoom) -> bool:
@@ -350,7 +349,7 @@ def _daily_report_due(user: User, now: datetime) -> bool:
     interval_days = max(1, user.daily_report_interval_days or 1)
     if user.daily_report_last_sent_at is None:
         return True
-    comparable_now = now_like(user.daily_report_last_sent_at) if user.daily_report_last_sent_at.tzinfo else now
+    comparable_now = now.astimezone(user.daily_report_last_sent_at.tzinfo) if user.daily_report_last_sent_at.tzinfo else now
     elapsed_days = (comparable_now.date() - user.daily_report_last_sent_at.date()).days
     return elapsed_days >= interval_days
 
@@ -391,6 +390,8 @@ def run_daily_reports() -> DailyReportBatchResult:
 
 
 def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatchResult:
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
     scanned = sent = skipped = failed = 0
     notification_ids: list[int] = []
 
@@ -440,7 +441,9 @@ def run_low_power_notifications(*, limit: int | None = None) -> NotificationBatc
                 body=content.text_body,
             )
             db.add(notification)
-            db.flush()
+            # The delivery and SMTP health logs use their own sessions. Publish
+            # the FK target and release the SQLite write lock before sending.
+            db.commit()
 
             result = send_email(
                 recipient_email,

@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -81,7 +81,7 @@ def check_and_store_room(
     db.flush()
     attempt.success = True
     attempt.reading_id = reading.id
-    attempt.balance = result.balance
+    attempt.balance = reading.balance
     attempt.finished_at = datetime.now()
     db.commit()
     db.refresh(reading)
@@ -111,7 +111,7 @@ def bound_room_statement():
         select(Room)
         .join(UserRoom, UserRoom.room_id == Room.id)
         .join(User, User.id == UserRoom.user_id)
-        .where(UserRoom.enabled.is_(True), User.is_verified.is_(True))
+        .where(Room.probe_only.is_(False), UserRoom.enabled.is_(True), User.is_verified.is_(True))
         .distinct()
         .order_by(Room.id)
     )
@@ -120,7 +120,8 @@ def bound_room_statement():
 def list_due_rooms(db: Session, *, limit: int | None = None) -> list[Room]:
     runtime = get_runtime_config(db)
     interval = timedelta(seconds=runtime.check_interval_seconds)
-    cutoff = datetime.now() - interval
+    # read_at is database generated (UTC CURRENT_TIMESTAMP on SQLite).
+    cutoff = datetime.now(timezone.utc) - interval
     latest_readings = (
         select(
             ElectricityReading.room_id.label("room_id"),
@@ -137,6 +138,7 @@ def list_due_rooms(db: Session, *, limit: int | None = None) -> list[Room]:
         .join(User, User.id == UserRoom.user_id)
         .outerjoin(latest_readings, latest_readings.c.room_id == Room.id)
         .where(
+            Room.probe_only.is_(False),
             UserRoom.enabled.is_(True),
             User.is_verified.is_(True),
             or_(latest_readings.c.last_read_at.is_(None), latest_readings.c.last_read_at <= cutoff),

@@ -20,10 +20,21 @@ export interface ChartRangeState {
   endAt: string;
 }
 
+// The readings endpoint accepts either inclusive bound independently.
+export function isChartRangeValid(range: ChartRangeState) {
+  if (range.key !== "custom") return true;
+  if (!range.startAt && !range.endAt) return false;
+  const start = range.startAt ? Date.parse(range.startAt) : -Infinity;
+  const end = range.endAt ? Date.parse(range.endAt) : Infinity;
+  return start <= end;
+}
+
 interface DashboardViewProps {
   announcements: Announcement[];
-  /** Dismissals are remembered per account so shared computers do not leak state. */
-  announcementsStorageKey?: string;
+  summariesError?: boolean;
+  chartError?: boolean;
+  onRetry?: () => void;
+  onRetryChart?: () => void;
   summaries: UserRoomSummary[];
   selectedBindingId?: number | null;
   chartReadings: Reading[];
@@ -35,16 +46,6 @@ interface DashboardViewProps {
   onChangeChartRange: (range: ChartRangeState) => void;
   onCheckRoom: (bindingId: number) => void;
   onGoRooms: () => void;
-}
-
-function selectPrimaryRoom(summaries: UserRoomSummary[]) {
-  return summaries.find((item) => item.enabled) ?? summaries[0];
-}
-
-function hasMeasuredAverage(item: UserRoomSummary) {
-  return ["measured", "measured_historical", "provider_reported", "provider_reported_historical"].includes(
-    item.usage.estimated_daily_usage_source ?? item.usage.average_daily_usage_source ?? ""
-  ) && Boolean(item.usage.estimated_daily_usage ?? item.usage.average_daily_usage);
 }
 
 function estimatedDailyUsage(item: UserRoomSummary) {
@@ -71,19 +72,6 @@ function formatUsageWindow(hours?: string | null) {
   return days < 2 ? `${days.toFixed(1)} 天读数` : `${Math.round(days)} 天读数`;
 }
 
-function defaultDailyUsage(item: UserRoomSummary) {
-  const threshold = Number(item.usage.alert_threshold);
-  if (Number.isFinite(threshold) && threshold > 0) {
-    if ((item.alert_threshold_mode ?? "days") === "days" && item.alert_days > 0) {
-      return threshold / item.alert_days;
-    }
-    if ((item.alert_threshold_mode ?? "days") === "average") {
-      return threshold;
-    }
-  }
-  return 5;
-}
-
 function dailyUsageBasis(item: UserRoomSummary) {
   const value = estimatedDailyUsage(item);
   const formatted = formatKwhPerDay(value);
@@ -97,13 +85,7 @@ function dailyUsageBasis(item: UserRoomSummary) {
   if (source === "measured") {
     return `余额下降实测 ${formatted}`;
   }
-  if (value) {
-    return `默认估算 ${formatted}`;
-  }
-  if (hasMeasuredAverage(item)) {
-    return `实测参考 ${formatted}`;
-  }
-  return `默认估算 ${formatKwhPerDay(defaultDailyUsage(item))}`;
+  return value != null ? `默认估算 ${formatted}` : "暂无日均用电数据";
 }
 
 function usageAverageHint(item: UserRoomSummary) {
@@ -120,8 +102,8 @@ function usageAverageHint(item: UserRoomSummary) {
   if (source === "measured_historical") {
     return `当前刚恢复用电，暂参考上一段活跃期的余额下降记录`;
   }
-  if (item.usage.latest_read_at) {
-    return `有效完整日样本不足，暂按${formatKwhPerDay(estimatedDailyUsage(item) ?? defaultDailyUsage(item))}估算`;
+  if (item.usage.latest_read_at && estimatedDailyUsage(item) != null) {
+    return `有效完整日样本不足，暂按${formatKwhPerDay(estimatedDailyUsage(item))}估算`;
   }
   return "暂无历史读数";
 }
@@ -130,9 +112,8 @@ function remainingHint(item: UserRoomSummary) {
   if (!item.usage.latest_balance) {
     return "暂无当前电量";
   }
-  if (["measured", "measured_historical", "provider_reported", "provider_reported_historical"].includes(item.usage.days_remaining_source ?? "")) {
-    return "基于最近实测日均用电估算";
-  }
+  if (item.usage.days_remaining == null) return "暂无可用估算";
+  if (item.usage.days_remaining_source !== "default") return `基于${dailyUsageBasis(item)}估算`;
   return `基于${dailyUsageBasis(item)}估算，获得足够完整日数据后会自动更新`;
 }
 
@@ -143,10 +124,10 @@ function thresholdHint(item: UserRoomSummary) {
     return "暂无提醒阈值";
   }
   if (mode === "fixed") {
-    return `固定阈值：电量低于 ${value} 时提醒`;
+    return `固定阈值：电量不高于 ${value} 时提醒`;
   }
   if (mode === "average") {
-    return `提醒阈值：低于 1 天用电量时提醒（${dailyUsageBasis(item)} = ${value}）`;
+    return `提醒阈值：电量不高于 1 天用电量时提醒（${dailyUsageBasis(item)} = ${value}）`;
   }
   return `提醒阈值：${item.alert_days} 天 × ${dailyUsageBasis(item)} = ${value}`;
 }
@@ -279,7 +260,10 @@ function OnboardingPanel({ onGoRooms }: { onGoRooms: () => void }) {
 }
 export function DashboardView({
   announcements,
-  announcementsStorageKey,
+  summariesError,
+  chartError,
+  onRetry,
+  onRetryChart,
   summaries,
   selectedBindingId,
   chartReadings,
@@ -292,9 +276,17 @@ export function DashboardView({
   onCheckRoom,
   onGoRooms
 }: DashboardViewProps) {
-  const primary = summaries.find((item) => item.binding_id === selectedBindingId) ?? selectPrimaryRoom(summaries);
+  const primary = summaries.find((item) => item.binding_id === selectedBindingId) ?? summaries[0];
   const lowCount = summaries.filter((item) => item.usage.is_low_power).length;
   const enabledCount = summaries.filter((item) => item.enabled).length;
+  const rangeValid = isChartRangeValid(chartRange);
+  const rangeError = !chartRange.startAt && !chartRange.endAt ? "请至少选择一个时间边界。" : "请确认时间有效且开始时间不晚于结束时间。";
+  const summaryErrorNotice = summariesError ? (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-4 text-sm">
+      {primary ? "宿舍数据刷新失败，以下为上次载入的数据。" : "宿舍数据读取失败，暂时无法显示总览。"}
+      {onRetry ? <Button variant="secondary" size="sm" onClick={onRetry}>重新读取宿舍</Button> : null}
+    </div>
+  ) : null;
 
   const overviewHeader = (
     <section className="dashboard-overview flex flex-col gap-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.12] via-panel/45 to-panel/20 p-5 sm:flex-row sm:items-end sm:justify-between sm:p-6">
@@ -305,30 +297,33 @@ export function DashboardView({
           {summaries.length > 0 ? `已绑定 ${summaries.length} 个宿舍 · ${enabledCount} 个正在监测` : "添加宿舍，记录电量变化，及时接收低电量提醒。"}
         </p>
       </div>
-      <Badge className="self-start sm:self-auto" tone={lowCount > 0 ? "danger" : summaries.length > 0 ? "success" : "muted"}>
-        {lowCount > 0 ? `${lowCount} 个宿舍需要关注` : summaries.length > 0 ? "当前运行正常" : "等待绑定宿舍"}
+      <Badge className="self-start sm:self-auto" tone={lowCount > 0 ? "danger" : "muted"}>
+        {lowCount > 0 ? `${lowCount} 个宿舍电量偏低` : summaries.length > 0 ? "暂无低电量标记" : "等待绑定宿舍"}
       </Badge>
     </section>
   );
 
-  if (loading) {
-    return <DashboardSkeleton />;
+  if (loading && !primary) {
+    return <div role="status"><span className="sr-only">正在读取宿舍数据</span><DashboardSkeleton /></div>;
   }
 
+  if (!primary && summariesError) return summaryErrorNotice;
   if (!primary) {
     return (
       <div className="space-y-5">
         {overviewHeader}
-        <AnnouncementsNotice announcements={announcements} defaultExpanded={false} storageKey={announcementsStorageKey} />
+        <AnnouncementsNotice announcements={announcements} />
         <OnboardingPanel onGoRooms={onGoRooms} />
       </div>
     );
   }
 
+  const waitingForBinding = selectedBindingId !== primary.binding_id;
   const checking = checkingId === primary.binding_id;
   return (
     <div className="space-y-6">
       {overviewHeader}
+      {summaryErrorNotice}
 
       <section aria-label="当前宿舍电量" className="dashboard-summary-surface min-w-0 overflow-hidden rounded-2xl border">
         <div className="dashboard-summary-toolbar flex flex-col gap-4 border-b border-border/60 p-4 sm:p-5 xl:flex-row xl:items-end xl:justify-between">
@@ -342,7 +337,13 @@ export function DashboardView({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="muted">{primary.room.provider === "hwgl" ? "HWGL 官方数据" : primary.room.provider === "mcard" ? "校园卡数据" : "已接入数据源"}</Badge>
-            <CooldownRefreshButton availableAt={primary.manual_check_available_at} checking={checking} onClick={() => onCheckRoom(primary.binding_id)} />
+            <CooldownRefreshButton
+              availableAt={primary.manual_check_available_at}
+              checking={checking}
+              busyElsewhere={checkingId != null && !checking}
+              roomLabel={`${primary.room.building_name} ${primary.room.room_number}`}
+              onClick={() => onCheckRoom(primary.binding_id)}
+            />
             <Button variant="ghost" size="sm" onClick={onGoRooms}>管理宿舍 <ArrowRight size={14} /></Button>
           </div>
         </div>
@@ -377,7 +378,7 @@ export function DashboardView({
           <CardHeader className="flex flex-col gap-3 border-b border-border sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-lg">电量走势</CardTitle>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">余额变化与充值记录；优先使用上游官方数据。</p>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">按数据更新时间显示余额；竖线标出近期已知充值时间。每次最多读取 5000 条。</p>
             </div>
             <span className="shrink-0 text-xs text-muted-foreground">{primary.room.building_name} · {primary.room.room_number}</span>
           </CardHeader>
@@ -404,6 +405,9 @@ export function DashboardView({
                     id="chart-start"
                     type="datetime-local"
                     value={chartRange.startAt}
+                    max={chartRange.endAt || undefined}
+                    aria-invalid={!rangeValid}
+                    aria-describedby={!rangeValid ? "chart-range-error" : undefined}
                     onChange={(event) => onChangeChartRange({ ...chartRange, startAt: event.target.value })}
                   />
                 </div>
@@ -413,13 +417,23 @@ export function DashboardView({
                     id="chart-end"
                     type="datetime-local"
                     value={chartRange.endAt}
+                    min={chartRange.startAt || undefined}
+                    aria-invalid={!rangeValid}
+                    aria-describedby={!rangeValid ? "chart-range-error" : undefined}
                     onChange={(event) => onChangeChartRange({ ...chartRange, endAt: event.target.value })}
                   />
                 </div>
               </div>
             ) : null}
 
-            {chartLoading ? (
+            {!rangeValid ? <p id="chart-range-error" role="status" className="text-sm text-muted-foreground">{rangeError}</p> : null}
+            {rangeValid && !waitingForBinding && chartError ? (
+              <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
+                {chartReadings.length ? "走势刷新失败，以下为上次载入的读数。" : "历史读数读取失败。"}
+                {onRetryChart ? <Button variant="secondary" size="sm" onClick={onRetryChart}>重新读取走势</Button> : null}
+              </div>
+            ) : null}
+            {!rangeValid ? null : waitingForBinding || (chartLoading && chartReadings.length === 0) ? (
               <div aria-label="正在读取历史读数" className="min-h-[280px] space-y-4 py-3" role="status">
                 <Skeleton className="h-3 w-28" />
                 <Skeleton className="h-[238px] w-full rounded-none" />
@@ -427,11 +441,12 @@ export function DashboardView({
               </div>
             ) : chartReadings.length > 0 ? (
               <PowerChart
+                key={`${primary.binding_id}:${chartRange.key}:${chartRange.startAt}:${chartRange.endAt}`}
                 readings={chartReadings}
                 averageDailyUsage={estimatedDailyUsage(primary)}
                 recharges={primary.recent_recharges}
               />
-            ) : (
+            ) : chartError ? null : (
               <EmptyState
                 title="暂无历史记录"
                 description="换一个时间范围，或点击立即刷新后保存新的电量记录。"
@@ -486,9 +501,6 @@ export function DashboardView({
           </Card>
           <AnnouncementsNotice
             announcements={announcements}
-            className="min-h-0 flex-1"
-            defaultExpanded={false}
-            storageKey={announcementsStorageKey}
           />
         </div>
       </section>

@@ -145,11 +145,21 @@ def validate_runtime_safety() -> None:
         "dev-secret-change-me-before-deploy",
         "change-this-dev-secret-before-deploy",
         "change-this-secret",
+        "replace-with-a-random-secret-at-least-32-chars",
+        "replace-with-a-different-random-secret-at-least-32-chars",
+        "REPLACE_WITH_A_RANDOM_SECRET",
+        "REPLACE_WITH_A_DIFFERENT_RANDOM_SECRET",
     }
     if settings.secret_key in insecure_secret_values or len(settings.secret_key) < 32:
         raise RuntimeError("SECRET_KEY must be changed to a random value of at least 32 characters when APP_DEBUG=false")
-    if not settings.credential_encryption_key or len(settings.credential_encryption_key) < 32:
-        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be a random value of at least 32 characters when APP_DEBUG=false")
+    encryption_key = settings.credential_encryption_key
+    if (
+        not encryption_key
+        or len(encryption_key) < 32
+        or encryption_key in insecure_secret_values
+        or encryption_key == settings.secret_key
+    ):
+        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be an independent random value of at least 32 characters")
 
     database_url_lower = settings.database_url.lower()
     if "change-this" in database_url_lower or "change_this" in database_url_lower:

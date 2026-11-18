@@ -57,3 +57,20 @@ def test_production_requires_independent_credential_encryption_key(monkeypatch) 
 
     with pytest.raises(RuntimeError, match="CREDENTIAL_ENCRYPTION_KEY"):
         validate_runtime_safety()
+
+
+@pytest.mark.parametrize(
+    ("signing_key", "encryption_key", "detail"),
+    [
+        ("replace-with-a-random-secret-at-least-32-chars", "k" * 32, "SECRET_KEY"),
+        ("s" * 32, "REPLACE_WITH_A_DIFFERENT_RANDOM_SECRET", "CREDENTIAL_ENCRYPTION_KEY"),
+        ("s" * 32, "s" * 32, "CREDENTIAL_ENCRYPTION_KEY"),
+    ],
+)
+def test_deployment_keys_must_be_replaced_independently(monkeypatch, signing_key, encryption_key, detail):
+    monkeypatch.setattr(settings, "debug", False)
+    monkeypatch.setattr(settings, "allow_insecure_startup", False)
+    monkeypatch.setattr(settings, "secret_key", signing_key)
+    monkeypatch.setattr(settings, "credential_encryption_key", encryption_key)
+    with pytest.raises(RuntimeError, match=detail):
+        validate_runtime_safety()

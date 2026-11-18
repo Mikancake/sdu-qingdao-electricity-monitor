@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_admin, db_session
+from app.schemas import DatabaseId
 from app.api.routes.admin_common import audit
 from app.models.admin_user import AdminUser
 from app.models.announcement import Announcement
@@ -49,7 +50,7 @@ def create_announcement(
 
 @router.patch("/announcements/{announcement_id}", response_model=AnnouncementOut)
 def update_announcement(
-    announcement_id: int,
+    announcement_id: DatabaseId,
     payload: AnnouncementUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -82,7 +83,7 @@ def update_announcement(
 
 @router.delete("/announcements/{announcement_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_announcement(
-    announcement_id: int,
+    announcement_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> None:

@@ -84,3 +84,65 @@ def test_failed_job_waits_then_can_retry(monkeypatch) -> None:
         assert run is not None
         assert run.attempt_count == 2
 
+
+
+def test_multiday_interval_does_not_reset_at_every_midnight():
+    interval = 2 * 86400
+    now = datetime(2026, 7, 11, 15, 20)
+    slot = scheduled_jobs.latest_aligned_slot(now, interval)
+    assert slot <= now < slot + timedelta(seconds=interval)
+    assert scheduled_jobs.latest_aligned_slot(slot + timedelta(days=1), interval) == slot
+    assert scheduled_jobs.latest_aligned_slot(slot + timedelta(days=2), interval) == slot + timedelta(days=2)
+
+
+def test_expired_attempt_cannot_overwrite_newer_success(monkeypatch):
+    factory = _session_factory(monkeypatch)
+    slot = now = datetime(2026, 7, 11, 8)
+    monkeypatch.setattr(scheduled_jobs, "now_like", lambda *_: now)
+
+    def slow_job():
+        nonlocal now
+        now += timedelta(hours=1)
+        replacement = scheduled_jobs.run_scheduled_job("slow", slot, lambda: "new")
+        assert replacement.status == "succeeded"
+        raise RuntimeError("late error")
+
+    late = scheduled_jobs.run_scheduled_job("slow", slot, slow_job)
+    assert late.status == "superseded"
+    with factory() as db:
+        run = db.scalar(select(ScheduledJobRun))
+        assert (run.attempt_count, run.status, run.details_json, run.error_message) == (2, "succeeded", '"new"', None)
+
+
+def test_retry_delay_starts_after_long_running_failure(monkeypatch):
+    _session_factory(monkeypatch)
+    slot = now = datetime(2026, 7, 11, 8)
+    monkeypatch.setattr(scheduled_jobs, "now_like", lambda *_: now)
+
+    def fail():
+        nonlocal now
+        now += timedelta(minutes=10)
+        raise RuntimeError("failed")
+
+    assert scheduled_jobs.run_scheduled_job("slow", slot, fail, retry_seconds=60).status == "failed"
+    now += timedelta(seconds=59)
+    assert not scheduled_jobs.run_scheduled_job("slow", slot, lambda: 0).executed
+    now += timedelta(seconds=1)
+    assert scheduled_jobs.run_scheduled_job("slow", slot, lambda: 0).status == "succeeded"
+
+
+def test_two_workers_observing_same_stale_attempt_cannot_both_reclaim(monkeypatch):
+    factory = _session_factory(monkeypatch)
+    now = datetime(2026, 7, 11, 10)
+    started = now - timedelta(hours=1)
+    with factory.begin() as db:
+        db.add(ScheduledJobRun(job_name="slow", scheduled_for=started, status="running",
+                               attempt_count=1, started_at=started))
+    with factory() as first, factory() as second:
+        first_view = first.scalar(select(ScheduledJobRun))
+        second_view = second.scalar(select(ScheduledJobRun))
+        # Both have already passed the SELECT on a backend without row locks.
+        assert scheduled_jobs._claim_existing(first, first_view, now=now, stale_seconds=60) is not None
+        assert scheduled_jobs._claim_existing(second, second_view, now=now, stale_seconds=60) is None
+    with factory() as db:
+        assert db.scalar(select(ScheduledJobRun.attempt_count)) == 2

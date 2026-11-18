@@ -3,13 +3,13 @@ import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BatteryCharging, Bell, KeyRound, Loader2, Mail, Play, RotateCcw, ShieldCheck, SlidersHorizontal } from "lucide-react";
 
-import { createApiClient } from "../../lib/api";
+import type { ApiClient } from "../../lib/api";
 import { formatDateTime } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
 import { ActivityChart, HealthOverview } from "./StatusCharts";
 import { BuildingStatsChart, CheckTrendChart, EmailTrendChart, UserGrowthChart } from "./DashboardCharts";
-import { ADMIN_TOKEN_KEY, describeError } from "./utils";
+import { describeError } from "./utils";
 
 type DashboardChartKey = "activity" | "checks" | "emails" | "users" | "buildings" | "health";
 
@@ -64,17 +64,18 @@ const DashboardStatCard = memo(function DashboardStatCard({ item, index }: { ite
 });
 
 export function StatusPanel({
+  api,
   onRunChecks,
   onRunNotifications,
   runningChecks,
   runningNotifications
 }: {
+  api: ApiClient;
   onRunChecks: () => void;
   onRunNotifications: () => void;
   runningChecks: boolean;
   runningNotifications: boolean;
 }) {
-  const api = useMemo(() => createApiClient(window.localStorage.getItem(ADMIN_TOKEN_KEY)), []);
   const [visibleCharts, setVisibleCharts] = useState(loadChartVisibility);
   const renderedCharts = useDeferredValue(visibleCharts);
   const statusQuery = useQuery({ queryKey: ["admin-status"], queryFn: api.getAdminStatus });
@@ -139,6 +140,12 @@ export function StatusPanel({
     }
   ], [status]);
 
+  if (!status) return statusQuery.isError ? (
+    <div role="alert" className="space-y-3 rounded-xl border border-danger/20 bg-panel p-4 text-sm">
+      <p>运行概览读取失败：{describeError(statusQuery.error)}</p>
+      <Button disabled={statusQuery.isFetching} variant="secondary" onClick={() => void statusQuery.refetch()}>重试</Button>
+    </div>
+  ) : <div role="status" className="p-4 text-sm text-muted-foreground">正在汇总平台运行数据…</div>;
   return (
     <div className="grid min-w-0 gap-6">
       <section aria-label="运行调度" className="grid min-w-0 gap-0 overflow-hidden rounded-lg border border-border bg-panel xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
@@ -165,8 +172,7 @@ export function StatusPanel({
           </div>
         </div>
       </section>
-      {statusQuery.isLoading ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin" />正在汇总平台运行数据…</div> : null}
-      {statusQuery.isError ? <div role="alert" className="rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-danger">{describeError(statusQuery.error)}</div> : null}
+      {statusQuery.isError ? <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-danger">刷新失败，当前显示上次读取的数据：{describeError(statusQuery.error)}<Button size="sm" variant="secondary" disabled={statusQuery.isFetching} onClick={() => void statusQuery.refetch()}>重试</Button></div> : null}
       <section aria-label="平台关键指标" className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((item, index) => (
           <DashboardStatCard key={item.key} index={index} item={item} />

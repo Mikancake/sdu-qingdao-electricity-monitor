@@ -6,7 +6,7 @@ from typing import Callable
 
 from app.db.session import SessionLocal
 from app.services.data_retention import run_data_retention_cleanup
-from app.services.notifications import run_daily_reports, run_low_power_notifications
+from app.services.notifications import DailyReportBatchResult, run_daily_reports, run_low_power_notifications
 from app.services.room_checks import run_room_checks
 from app.services.hwgl_sync import run_hwgl_metadata_sync
 from app.services.hwgl_probe import run_hwgl_probe_jobs
@@ -32,7 +32,11 @@ state = WorkerState()
 
 
 def next_aligned_time(now: datetime, interval_seconds: int) -> datetime:
-    return latest_aligned_slot(now, interval_seconds) + timedelta(seconds=max(60, interval_seconds))
+    following = latest_aligned_slot(now, interval_seconds) + timedelta(seconds=max(60, interval_seconds))
+    if interval_seconds <= 24 * 60 * 60:
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return min(following, midnight)
+    return following
 
 
 def next_daily_time(now: datetime, *, hour: int) -> datetime:
@@ -64,6 +68,15 @@ def _log_outcome(outcome: ScheduledJobOutcome) -> None:
     )
 
 
+def _deliver_daily_reports() -> DailyReportBatchResult:
+    result = run_daily_reports()
+    if result.failed:
+        # Successful recipients have already been marked not due. Keep the
+        # slot retryable for recipients whose delivery was rejected.
+        raise RuntimeError(f"daily report delivery failed for {result.failed} of {result.scanned} users")
+    return result
+
+
 def _run_slot(
     job_name: str,
     scheduled_for: datetime | None,
@@ -88,7 +101,9 @@ def _run_slot(
         stale_seconds=stale_seconds,
     )
     _log_outcome(outcome)
-    if outcome.status == "succeeded":
+    if outcome.status == "succeeded" or (
+        outcome.status == "skipped" and scheduled_job_succeeded(job_name, scheduled_for)
+    ):
         completed_slots[job_name] = scheduled_for
     return outcome
 
@@ -108,7 +123,7 @@ def main() -> int:
 
             now = datetime.now()
             check_slot = latest_aligned_slot(now, runtime.check_interval_seconds)
-            check_outcome = _run_slot(
+            _run_slot(
                 "room_checks",
                 check_slot,
                 lambda: run_room_checks(check_all=True, source="worker", use_batch_limit=False),
@@ -116,9 +131,7 @@ def main() -> int:
                 next_probe_at,
                 stale_seconds=7200,
             )
-            if (check_outcome is not None and check_outcome.status == "succeeded") or scheduled_job_succeeded(
-                "room_checks", check_slot
-            ):
+            if completed_slots.get("room_checks") == check_slot:
                 _run_slot(
                     "post_check_notifications",
                     check_slot,
@@ -139,7 +152,7 @@ def main() -> int:
             _run_slot(
                 "daily_reports",
                 current_daily_slot(now, hour=8),
-                run_daily_reports,
+                _deliver_daily_reports,
                 completed_slots,
                 next_probe_at,
             )

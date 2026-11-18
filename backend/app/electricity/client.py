@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
 import requests
@@ -75,7 +75,12 @@ class CampusElectricityClient:
             if response.status_code != 200:
                 return ElectricityQueryResult(False, error_kind="http", error_msg=f"HTTP {response.status_code}")
 
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                return ElectricityQueryResult(False, error_kind="parse", error_msg=f"invalid JSON: {exc}")
+            if not isinstance(payload, dict):
+                return ElectricityQueryResult(False, error_kind="parse", error_msg="接口响应不是对象")
             if payload.get("code") != 200:
                 return ElectricityQueryResult(
                     False,
@@ -83,12 +88,14 @@ class CampusElectricityClient:
                     error_msg=f"API code={payload.get('code')}, message={payload.get('message') or payload.get('msg')}",
                 )
 
-            info_text = payload.get("map", {}).get("showData", {}).get("信息", "")
-            if not info_text:
-                tipinfo = payload.get("map", {}).get("tipinfo")
-                return ElectricityQueryResult(False, error_kind="parse", error_msg=tipinfo or "信息字段为空")
+            details = payload.get("map")
+            show_data = details.get("showData") if isinstance(details, dict) else None
+            info_text = show_data.get("信息") if isinstance(show_data, dict) else None
+            if not isinstance(info_text, str) or not info_text:
+                tip = details.get("tipinfo") if isinstance(details, dict) else None
+                return ElectricityQueryResult(False, error_kind="parse", error_msg=str(tip or "信息字段为空"))
 
-            match = re.search(r"([\d.]+)\s*度", info_text)
+            match = re.search(r"([+\-]?[\d.]+)\s*度", info_text)
             if not match:
                 return ElectricityQueryResult(False, error_kind="parse", error_msg=f"无法解析电量：{info_text}")
             return ElectricityQueryResult(True, balance=Decimal(match.group(1)), provider=self.provider)
@@ -96,5 +103,5 @@ class CampusElectricityClient:
             return ElectricityQueryResult(False, error_kind="timeout", error_msg=f"{type(exc).__name__}: {exc}")
         except requests.RequestException as exc:
             return ElectricityQueryResult(False, error_kind="network", error_msg=f"{type(exc).__name__}: {exc}")
-        except ValueError as exc:
+        except (InvalidOperation, ValueError) as exc:
             return ElectricityQueryResult(False, error_kind="parse", error_msg=f"{type(exc).__name__}: {exc}")

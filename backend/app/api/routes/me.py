@@ -6,8 +6,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import db_session, verified_user
+from app.schemas import DatabaseId
 from app.core.config import settings
-from app.core.security import hash_password, sign_access_token, verify_password, verify_verification_code
+from app.core.security import credential_stamp, hash_password, sign_access_token, verify_password, verify_verification_code
 from app.models.check_attempt import CheckAttempt
 from app.models.email_verification_code import EmailVerificationCode
 from app.models.electricity_reading import ElectricityReading
@@ -31,6 +32,7 @@ from app.schemas.binding import UserRoomCreate, UserRoomOut, UserRoomUpdate
 from app.schemas.reading import CheckAttemptOut, ElectricityReadingOut, ElectricityRechargeOut
 from app.schemas.runtime import RuntimeLimitsOut
 from app.api.routes.auth import (
+    consume_verification_code,
     create_verification_code,
     deliver_verification_code,
     ensure_email_shape,
@@ -112,7 +114,7 @@ def ensure_user_config_not_below_global(db: Session, *, notify_cooldown_hours: i
         )
 
 
-def find_or_create_room_from_data(db: Session, data: dict) -> Room:
+def room_candidate(db: Session, data: dict) -> Room:
     try:
         room_data = normalize_room_data(data)
     except RoomInputError as exc:
@@ -124,29 +126,24 @@ def find_or_create_room_from_data(db: Session, data: dict) -> Room:
         Room.room_number == room_data["room_number"],
     )
     room = db.scalar(stmt)
-    if room is not None:
-        # A custom administrator probe may have created this exact location
-        # as an isolated row.  A real user binding promotes it to a normal
-        # room instead of creating a duplicate (the location is unique).
-        if room.probe_only:
-            room.probe_only = False
-        return room
-    room = Room(**room_data)
-    db.add(room)
-    db.flush()
-    return room
+    return room if room is not None else Room(**room_data)
 
 
-def find_or_create_room(db: Session, payload: UserRoomCreate) -> Room:
-    return find_or_create_room_from_data(db, payload.model_dump())
-
-
-def query_room_balance_once(db: Session, room: Room, *, source: str):
-    execution = execute_room_query(room, source=source)
-    result = execution.result
+def validate_and_record_room(db: Session, room: Room, *, source: str) -> None:
+    # Token reservation writes through a separate session. Do not insert a
+    # new room (or promote a probe) before this call: SQLite has one writer.
+    result = execute_room_query(room, source=source).result
     if result.success and result.balance is not None:
         apply_query_resolution(room, result)
-        return result
+        room.probe_only = False
+        db.add(room)
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="room location changed; please retry") from exc
+        db.add(reading_from_query(room.id, result, source=source))
+        return
 
     status_code, detail = public_room_check_error(result.error_kind)
     raise HTTPException(status_code=status_code, detail=detail)
@@ -237,7 +234,7 @@ def list_room_recharges(
         return []
     # Older installations may be upgraded before the recharge migration is
     # applied.  The dashboard should remain usable while that table is absent.
-    if not inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+    if not inspect(db.connection()).has_table(ElectricityRecharge.__tablename__):
         return []
     runtime = get_runtime_config(db)
     effective_days = days if days is not None else runtime.hwgl_recharge_history_days
@@ -286,6 +283,24 @@ def list_my_room_summaries(
     return [build_dashboard_item(db, binding) for binding in db.scalars(stmt)]
 
 
+def enforce_room_validation_limit(request: Request, user: User) -> None:
+    enforce_rate_limit(rate_limit_key(request, "me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+    enforce_rate_limit(account_rate_limit_key("me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+
+
+def ensure_binding_capacity(db: Session, user_id: int, limit: int, *, additional: int = 1) -> None:
+    count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user_id)) or 0
+    if count + additional > limit:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "room_bind_limit",
+                "message": f"最多只能绑定 {limit} 个宿舍",
+                "max_rooms_per_user": limit,
+            },
+        )
+
+
 @router.post("/rooms", response_model=UserRoomOut, status_code=status.HTTP_201_CREATED)
 def bind_my_room(
     request: Request,
@@ -293,29 +308,19 @@ def bind_my_room(
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> UserRoom:
-    enforce_rate_limit(rate_limit_key(request, "me:bind-room", user.id), limit=10, window_seconds=60 * 60)
-    enforce_rate_limit(account_rate_limit_key("me:bind-room", user.id), limit=10, window_seconds=60 * 60)
+    enforce_room_validation_limit(request, user)
     locked_user = db.scalar(select(User).where(User.id == user.id).with_for_update())
     if locked_user is None:
         raise HTTPException(status_code=401, detail="user not found")
     runtime = get_runtime_config(db)
-    bound_count = db.scalar(select(func.count(UserRoom.id)).where(UserRoom.user_id == user.id)) or 0
-    if bound_count >= runtime.max_rooms_per_user:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "kind": "room_bind_limit",
-                "message": f"最多只能绑定 {runtime.max_rooms_per_user} 个宿舍",
-                "max_rooms_per_user": runtime.max_rooms_per_user,
-            },
-        )
-    room = find_or_create_room(db, payload)
+    ensure_binding_capacity(db, user.id, runtime.max_rooms_per_user)
+    room = room_candidate(db, payload.model_dump())
     existing_binding_id = db.scalar(
         select(UserRoom.id).where(UserRoom.user_id == user.id, UserRoom.room_id == room.id).limit(1)
     )
     if existing_binding_id is not None:
         raise HTTPException(status_code=409, detail="room already bound")
-    query_result = query_room_balance_once(db, room, source="bind")
+    validate_and_record_room(db, room, source="bind")
     binding = UserRoom(
         user_id=user.id,
         room_id=room.id,
@@ -326,8 +331,11 @@ def bind_my_room(
     )
     db.add(binding)
     try:
-        db.flush()
-        db.add(reading_from_query(room.id, query_result, source="bind"))
+        if db.get_bind().dialect.name == "sqlite":
+            # SELECT FOR UPDATE is ignored on SQLite. Recheck once the
+            # binding is flushed and this transaction owns the write lock.
+            db.flush()
+            ensure_binding_capacity(db, user.id, runtime.max_rooms_per_user, additional=0)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -338,7 +346,7 @@ def bind_my_room(
 
 @router.get("/rooms/{binding_id}/summary", response_model=UserRoomDashboardOut)
 def get_my_room_summary(
-    binding_id: int,
+    binding_id: DatabaseId,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> UserRoomDashboardOut:
@@ -349,7 +357,7 @@ def get_my_room_summary(
 @router.post("/rooms/{binding_id}/check", response_model=ElectricityReadingOut)
 def check_my_room(
     request: Request,
-    binding_id: int,
+    binding_id: DatabaseId,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> ElectricityReading:
@@ -381,7 +389,7 @@ def check_my_room(
 
 @router.get("/rooms/{binding_id}/readings", response_model=list[ElectricityReadingOut])
 def list_my_room_readings(
-    binding_id: int,
+    binding_id: DatabaseId,
     limit: int = Query(default=500, ge=1, le=5000),
     days: int | None = Query(default=None, ge=1, le=365),
     start_at: datetime | None = Query(default=None),
@@ -439,7 +447,7 @@ def list_all_my_readings(
 
 @router.get("/rooms/{binding_id}/recharges", response_model=list[ElectricityRechargeOut])
 def list_my_room_recharges(
-    binding_id: int,
+    binding_id: DatabaseId,
     limit: int = Query(default=50, ge=1, le=500),
     days: int | None = Query(default=None, ge=1, le=730),
     user: User = Depends(verified_user),
@@ -459,8 +467,16 @@ def list_my_check_attempts(
     stmt = (
         select(CheckAttempt)
         .options(selectinload(CheckAttempt.room))
-        .where(CheckAttempt.room_id.in_(room_ids))
-        .order_by(CheckAttempt.started_at.desc())
+        .where(
+            CheckAttempt.room_id.in_(room_ids),
+            (CheckAttempt.user_id == user.id)
+            | (
+                CheckAttempt.source.in_(("worker", "admin", "cli"))
+                & CheckAttempt.user_id.is_(None)
+                & CheckAttempt.user_room_id.is_(None)
+            ),
+        )
+        .order_by(CheckAttempt.started_at.desc(), CheckAttempt.id.desc())
         .limit(limit)
     )
     attempts = list(db.scalars(stmt))
@@ -483,8 +499,8 @@ def update_my_preferences(
     if "notify_cooldown_hours" in payload.model_fields_set:
         ensure_user_config_not_below_global(db, notify_cooldown_hours=payload.notify_cooldown_hours)
         user.notify_cooldown_hours = payload.notify_cooldown_hours
-    if "daily_report_enabled" in payload.model_fields_set:
-        user.daily_report_enabled = bool(payload.daily_report_enabled)
+    if payload.daily_report_enabled is not None:
+        user.daily_report_enabled = payload.daily_report_enabled
     if payload.daily_report_interval_days is not None:
         user.daily_report_interval_days = payload.daily_report_interval_days
     db.commit()
@@ -521,6 +537,12 @@ def send_my_test_email(
     return TestEmailOut(email=user.notification_recipient_email, email_sent=True)
 
 
+def notification_code_purpose(user: User) -> str:
+    # Fits the existing 40-character purpose column. Bind to the credentials
+    # as well as the id (SQLite may reuse an id after account deletion).
+    return "notify:" + credential_stamp(f"notify:{user.id}:{user.password_hash}")[:32]
+
+
 @router.post("/notification-email/request-code", response_model=VerificationCodeOut)
 def request_notification_email_code(
     request: Request,
@@ -534,7 +556,7 @@ def request_notification_email_code(
     enforce_rate_limit(account_rate_limit_key("me:notification-email-code", user.id), limit=10, window_seconds=60 * 60)
     enforce_rate_limit(rate_limit_key(request, "me:notification-email-code", user.id, email), limit=6, window_seconds=60 * 60)
     ensure_verification_email_not_cooling(db, email, "notification_email")
-    record, code = create_verification_code(db, email, purpose="notification_email")
+    record, code = create_verification_code(db, email, purpose=notification_code_purpose(user))
     db.commit()
     email_sent = deliver_verification_code(email, code)
     mark_verification_email_delivered(db, record, email_sent)
@@ -550,17 +572,18 @@ def verify_notification_email(
 ) -> User:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
+    enforce_rate_limit(account_rate_limit_key("me:notification-email-verify", user.id), limit=20, window_seconds=15 * 60)
     enforce_rate_limit(rate_limit_key(request, "me:notification-email-verify", user.id, email), limit=20, window_seconds=15 * 60)
     now = datetime.now()
     stmt = (
         select(EmailVerificationCode)
         .where(
             EmailVerificationCode.email == email,
-            EmailVerificationCode.purpose == "notification_email",
+            EmailVerificationCode.purpose == notification_code_purpose(user),
             EmailVerificationCode.consumed_at.is_(None),
             EmailVerificationCode.expires_at >= now,
         )
-        .order_by(EmailVerificationCode.created_at.desc())
+        .order_by(EmailVerificationCode.created_at.desc(), EmailVerificationCode.id.desc())
         .limit(5)
     )
     records = list(db.scalars(stmt))
@@ -568,9 +591,9 @@ def verify_notification_email(
     if matched is None:
         raise HTTPException(status_code=400, detail="invalid or expired verification code")
 
+    consume_verification_code(db, matched)
     user.notification_email = email
     user.notification_email_verified_at = now
-    matched.consumed_at = now
     db.commit()
     db.refresh(user)
     return user
@@ -578,7 +601,8 @@ def verify_notification_email(
 
 @router.patch("/rooms/{binding_id}", response_model=UserRoomOut)
 def update_my_room_binding(
-    binding_id: int,
+    request: Request,
+    binding_id: DatabaseId,
     payload: UserRoomUpdate,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
@@ -617,7 +641,7 @@ def update_my_room_binding(
                 if "building_param" in payload.model_fields_set and payload.building_param is not None
                 else binding.room.building_param
             )
-        room = find_or_create_room_from_data(db, room_payload)
+        room = room_candidate(db, room_payload)
         existing_binding_id = db.scalar(
             select(UserRoom.id)
             .where(UserRoom.user_id == user.id, UserRoom.room_id == room.id, UserRoom.id != binding.id)
@@ -625,9 +649,10 @@ def update_my_room_binding(
         )
         if existing_binding_id is not None:
             raise HTTPException(status_code=409, detail="room already bound")
-        query_result = query_room_balance_once(db, room, source="room_update")
-        binding.room_id = room.id
-        db.add(reading_from_query(room.id, query_result, source="room_update"))
+        if room.id != binding.room_id:
+            enforce_room_validation_limit(request, user)
+            validate_and_record_room(db, room, source="room_update")
+            binding.room = room
     if payload.alert_days is not None:
         binding.alert_days = payload.alert_days
     if payload.alert_threshold_mode is not None:
@@ -664,7 +689,7 @@ def update_my_room_binding(
 
 @router.delete("/rooms/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_my_room_binding(
-    binding_id: int,
+    binding_id: DatabaseId,
     user: User = Depends(verified_user),
     db: Session = Depends(db_session),
 ) -> None:

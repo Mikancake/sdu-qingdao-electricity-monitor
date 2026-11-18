@@ -8,12 +8,13 @@ import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar, LogToolbar } from "./toolbars";
 import { compareDate, compareNumber, compareText, healthLabel, healthTone, LogFilters, matchesSearch } from "./utils";
 import { Edit3, Loader2, Play, Save, Trash2, X } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useMemo, useState } from "react";
 
 export function TokenPanel({
   tokens,
   logs,
   loading,
+  listProblem, logsProblem,
   onCreate,
   onUpdate,
   onTest,
@@ -27,11 +28,12 @@ export function TokenPanel({
 }: {
   tokens: AdminAuthToken[];
   logs: AdminAuthTokenHealthLog[];
+  listProblem: ReactNode; logsProblem: ReactNode;
   loading: boolean;
-  onCreate: (payload: { name: string; token_value: string; min_interval_seconds: number; enabled: boolean }) => void;
+  onCreate: (payload: { name: string; token_value: string; min_interval_seconds: number; enabled: boolean }, onSuccess: () => void) => void;
   onUpdate: (
     tokenId: number,
-    payload: { name?: string; token_value?: string; min_interval_seconds?: number; enabled?: boolean }
+    payload: { name?: string; token_value?: string; min_interval_seconds?: number; enabled?: boolean }, onSuccess: () => void
   ) => void;
   onTest: (tokenId: number) => void;
   onToggle: (token: AdminAuthToken) => void;
@@ -79,9 +81,10 @@ export function TokenPanel({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    onCreate({ name: name.trim(), token_value: value.trim(), min_interval_seconds: interval, enabled: true });
-    setName("");
-    setValue("");
+    onCreate({ name: name.trim(), token_value: value.trim(), min_interval_seconds: interval, enabled: true }, () => {
+      setName("");
+      setValue("");
+    });
   }
 
   function startEdit(token: AdminAuthToken) {
@@ -98,13 +101,11 @@ export function TokenPanel({
       token_value: editValue.trim() || undefined,
       min_interval_seconds: editInterval,
       enabled: editEnabled
-    });
-    setEditingId(null);
-    setEditValue("");
+    }, () => { setEditingId(null); setEditValue(""); });
   }
 
   return (
-    <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <fieldset aria-label="Token 管理" disabled={saving} aria-busy={saving} className="grid min-w-0 items-start gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
       <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>添加 Token</CardTitle>
@@ -113,23 +114,23 @@ export function TokenPanel({
           <form className="space-y-4" onSubmit={submit}>
             <div>
               <Label htmlFor="token-name">名称</Label>
-              <Input id="token-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="token-1" required />
+              <Input id="token-name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="token-1" required />
             </div>
             <div>
               <Label htmlFor="token-value">Token</Label>
-              <Input id="token-value" value={value} onChange={(event) => setValue(event.target.value)} placeholder="bearer ..." required />
+              <Input id="token-value" type="password" minLength={10} maxLength={8192} autoComplete="off" value={value} onChange={(event) => setValue(event.target.value)} placeholder="至少 10 个字符" required />
             </div>
             <div>
               <Label htmlFor="token-interval">最小间隔（秒）</Label>
               <Input
                 id="token-interval"
                 type="number"
-                min={0}
+                min={0} max={3600} required
                 value={interval}
                 onChange={(event) => setInterval(Number(event.target.value))}
               />
             </div>
-            <Button className="w-full" disabled={saving || !name.trim() || !value.trim()}>
+            <Button className="w-full" disabled={saving || !name.trim() || value.trim().length < 10}>
               {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
               保存 Token
             </Button>
@@ -158,7 +159,7 @@ export function TokenPanel({
               { value: "interval_desc", label: "间隔从长到短" }
             ]}
           />
-          {loading ? (
+          {listProblem || (loading ? (
             <ListSkeleton rows={4} />
           ) : (
             <div className="responsive-table-shell rounded-lg border border-border">
@@ -177,7 +178,7 @@ export function TokenPanel({
                   {visibleTokens.length === 0 ? (
                     <tr>
                       <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={6}>
-                        没有匹配的 Token
+                        {tokenSearch ? "没有匹配的 Token" : "暂无 Token 配置"}
                       </td>
                     </tr>
                   ) : (
@@ -186,7 +187,7 @@ export function TokenPanel({
                       {editingId === token.id ? (
                         <>
                           <td data-label="名称" className="px-4 py-3">
-                            <Input value={editName} onChange={(event) => setEditName(event.target.value)} />
+                            <Input aria-label="Token 名称" maxLength={80} required form={`edit-token-${token.id}`} value={editName} onChange={(event) => setEditName(event.target.value)} />
                             <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                               <input
                                 className="h-4 w-4 accent-primary"
@@ -199,6 +200,7 @@ export function TokenPanel({
                           </td>
                           <td data-label="Token" className="px-4 py-3">
                             <Input
+                              aria-label="替换 Token" type="password" autoComplete="off" form={`edit-token-${token.id}`} minLength={10} maxLength={8192}
                               value={editValue}
                               onChange={(event) => setEditValue(event.target.value)}
                               placeholder="留空则不替换 Token"
@@ -207,8 +209,9 @@ export function TokenPanel({
                           </td>
                           <td data-label="间隔" className="px-4 py-3">
                             <Input
+                              aria-label="最小间隔（秒）"
                               type="number"
-                              min={0}
+                              min={0} max={3600} required form={`edit-token-${token.id}`}
                               value={editInterval}
                               onChange={(event) => setEditInterval(Number(event.target.value))}
                             />
@@ -219,14 +222,14 @@ export function TokenPanel({
                           </td>
                           <td data-label="最近使用" className="px-4 py-3 text-muted-foreground">{formatDateTime(token.last_used_at)}</td>
                           <td data-label="操作" className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
-                              <Button size="icon" variant="secondary" title="保存" onClick={() => saveEdit(token.id)}>
+                            <form className="flex justify-end gap-2" id={`edit-token-${token.id}`} onSubmit={(event) => { event.preventDefault(); saveEdit(token.id); }}>
+                              <Button type="submit" disabled={!editName.trim() || Boolean(editValue && editValue.trim().length < 10)} size="icon" variant="secondary" title="保存">
                                 <Save size={15} />
                               </Button>
-                              <Button size="icon" variant="ghost" title="取消" onClick={() => setEditingId(null)}>
+                              <Button type="button" size="icon" variant="ghost" title="取消" onClick={() => { setEditingId(null); setEditValue(""); }}>
                                 <X size={15} />
                               </Button>
-                            </div>
+                            </form>
                           </td>
                         </>
                       ) : (
@@ -273,7 +276,7 @@ export function TokenPanel({
                 </tbody>
               </table>
             </div>
-          )}
+          ))}
         </CardContent>
       </Card>
 
@@ -283,7 +286,7 @@ export function TokenPanel({
         </CardHeader>
         <CardContent>
           <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
-          {logsLoading ? (
+          {logsProblem || (logsLoading ? (
             <ListSkeleton rows={4} />
           ) : (
             <div className="responsive-table-shell rounded-lg border border-border">
@@ -311,12 +314,12 @@ export function TokenPanel({
                       <td data-label="Token" className="px-4 py-3">{log.token_name ?? `#${log.token_id ?? "-"}`}</td>
                       <td data-label="来源" className="px-4 py-3 text-muted-foreground">{log.source}</td>
                       <td data-label="结果" className="px-4 py-3">
-                        <Badge tone={log.success ? "success" : healthTone(log.health_status)}>
-                          {log.success ? "成功" : healthLabel(log.health_status)}
+                        <Badge tone={log.success ? "success" : "danger"}>
+                          {log.success ? "成功" : "失败"}
                         </Badge>
                       </td>
                       <td data-label="错误" className="px-4 py-3 text-muted-foreground">
-                        {log.error_kind ? `${log.error_kind}: ${log.error_msg ?? ""}` : "-"}
+                        {[log.error_kind, log.error_msg].filter(Boolean).join(": ") || "-"}
                       </td>
                     </tr>
                   ))
@@ -324,9 +327,9 @@ export function TokenPanel({
               </tbody>
             </table>
           </div>
-          )}
+          ))}
         </CardContent>
       </Card>
-    </div>
+    </fieldset>
   );
 }

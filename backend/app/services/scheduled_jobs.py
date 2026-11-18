@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Callable, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,9 +32,12 @@ def now_like(value: datetime | None = None) -> datetime:
 
 def latest_aligned_slot(now: datetime, interval_seconds: int) -> datetime:
     interval = max(60, interval_seconds)
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    elapsed_seconds = max(0, int((now - midnight).total_seconds()))
-    return midnight + timedelta(seconds=(elapsed_seconds // interval) * interval)
+    anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if interval > 24 * 60 * 60:
+        # A midnight anchor that moves every day collapses multi-day intervals to one day.
+        anchor = anchor.replace(year=1970, month=1, day=1)
+    step = timedelta(seconds=interval)
+    return anchor + ((now - anchor) // step) * step
 
 
 def current_daily_slot(now: datetime, *, hour: int) -> datetime | None:
@@ -60,32 +63,40 @@ def _claim_existing(
     run: ScheduledJobRun,
     *,
     now: datetime,
-    retry_seconds: int,
     stale_seconds: int,
-) -> int | None:
+) -> tuple[int, int] | None:
     if run.status == "succeeded":
         return None
     if run.status == "running" and run.started_at > now - timedelta(seconds=max(60, stale_seconds)):
         return None
     if run.status == "failed" and run.next_retry_at is not None and run.next_retry_at > now:
         return None
-    run.status = "running"
-    run.attempt_count += 1
-    run.started_at = now
-    run.finished_at = None
-    run.next_retry_at = now + timedelta(seconds=max(30, retry_seconds))
-    run.error_message = None
+    # SQLite does not implement SELECT FOR UPDATE. Compare-and-swap the
+    # observed attempt so two workers cannot both reclaim this row.
+    attempt = run.attempt_count + 1
+    run_id = run.id
+    claimed = db.execute(
+        update(ScheduledJobRun)
+        .where(
+            ScheduledJobRun.id == run_id,
+            ScheduledJobRun.status == run.status,
+            ScheduledJobRun.attempt_count == run.attempt_count,
+        )
+        .values(
+            status="running", attempt_count=attempt, started_at=now, finished_at=None,
+            next_retry_at=None, error_message=None, details_json=None,
+        )
+    ).rowcount
     db.commit()
-    return run.id
+    return (run_id, attempt) if claimed else None
 
 
 def claim_scheduled_job(
     job_name: str,
     scheduled_for: datetime,
     *,
-    retry_seconds: int = 300,
     stale_seconds: int = 1800,
-) -> int | None:
+) -> tuple[int, int] | None:
     with SessionLocal() as db:
         run = db.scalar(
             select(ScheduledJobRun)
@@ -101,18 +112,16 @@ def claim_scheduled_job(
                 db,
                 run,
                 now=now,
-                retry_seconds=retry_seconds,
                 stale_seconds=stale_seconds,
             )
 
-        now = now_like(scheduled_for)
+        now = now_like()
         run = ScheduledJobRun(
             job_name=job_name,
             scheduled_for=scheduled_for,
             status="running",
             attempt_count=1,
             started_at=now,
-            next_retry_at=now + timedelta(seconds=max(30, retry_seconds)),
         )
         db.add(run)
         try:
@@ -120,7 +129,7 @@ def claim_scheduled_job(
         except IntegrityError:
             db.rollback()
             return None
-        return run.id
+        return run.id, 1
 
 
 def scheduled_job_succeeded(job_name: str, scheduled_for: datetime) -> bool:
@@ -134,17 +143,30 @@ def scheduled_job_succeeded(job_name: str, scheduled_for: datetime) -> bool:
     return status == "succeeded"
 
 
-def _finish_job(run_id: int, *, status: str, result: Any = None, error_message: str | None = None) -> None:
+def _finish_job(
+    claim: tuple[int, int], *, status: str, retry_seconds: int,
+    result: Any = None, error_message: str | None = None,
+) -> bool:
+    run_id, attempt = claim
+    finished = now_like()
     with SessionLocal() as db:
-        run = db.get(ScheduledJobRun, run_id)
-        if run is None:
-            return
-        run.status = status
-        run.finished_at = now_like(run.started_at)
-        run.next_retry_at = None if status == "succeeded" else run.next_retry_at
-        run.details_json = _result_json(result)
-        run.error_message = error_message[:4000] if error_message else None
+        changed = db.execute(
+            update(ScheduledJobRun)
+            .where(
+                ScheduledJobRun.id == run_id,
+                ScheduledJobRun.attempt_count == attempt,
+                ScheduledJobRun.status == "running",
+            )
+            .values(
+                status=status,
+                finished_at=finished,
+                details_json=_result_json(result),
+                next_retry_at=(finished + timedelta(seconds=max(30, retry_seconds)) if status == "failed" else None),
+                error_message=error_message[:4000] if error_message else None,
+            )
+        ).rowcount
         db.commit()
+        return bool(changed)
 
 
 def run_scheduled_job(
@@ -155,31 +177,30 @@ def run_scheduled_job(
     retry_seconds: int = 300,
     stale_seconds: int = 1800,
 ) -> ScheduledJobOutcome:
-    run_id = claim_scheduled_job(
+    claim = claim_scheduled_job(
         job_name,
         scheduled_for,
-        retry_seconds=retry_seconds,
         stale_seconds=stale_seconds,
     )
-    if run_id is None:
+    if claim is None:
         return ScheduledJobOutcome(job_name=job_name, scheduled_for=scheduled_for, executed=False, status="skipped")
     try:
         result = callback()
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
-        _finish_job(run_id, status="failed", error_message=message)
+        finished = _finish_job(claim, status="failed", retry_seconds=retry_seconds, error_message=message)
         return ScheduledJobOutcome(
             job_name=job_name,
             scheduled_for=scheduled_for,
             executed=True,
-            status="failed",
+            status="failed" if finished else "superseded",
             error_message=message,
         )
-    _finish_job(run_id, status="succeeded", result=result)
+    finished = _finish_job(claim, status="succeeded", retry_seconds=retry_seconds, result=result)
     return ScheduledJobOutcome(
         job_name=job_name,
         scheduled_for=scheduled_for,
         executed=True,
-        status="succeeded",
+        status="succeeded" if finished else "superseded",
         result=result,
     )

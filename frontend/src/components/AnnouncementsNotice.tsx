@@ -1,13 +1,75 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { ChevronDown, Megaphone } from "lucide-react";
+import { useId, useRef } from "react";
+import { ChevronDown, Megaphone, X } from "lucide-react";
+
 import type { Announcement } from "../lib/types";
 import { cn, formatDateTime } from "../lib/utils";
-interface AnnouncementsNoticeProps { announcements: Announcement[]; className?: string; defaultExpanded?: boolean; heading?: string; storageKey?: string; }
-export function AnnouncementsNotice({ announcements, className, defaultExpanded = false, heading = "公告" }: AnnouncementsNoticeProps) {
- const [expanded,setExpanded]=useState(defaultExpanded); const dialogRef=useRef<HTMLDivElement>(null);
- useEffect(()=>{if(!expanded)return;const previous=document.activeElement instanceof HTMLElement?document.activeElement:null;const overflow=document.body.style.overflow;document.body.style.overflow="hidden";dialogRef.current?.focus({preventScroll:true});const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setExpanded(false)};document.addEventListener("keydown",onKey);return()=>{document.removeEventListener("keydown",onKey);document.body.style.overflow=overflow;previous?.focus()};},[expanded]);
- if(!announcements.length)return null; const item=announcements[0]; const preview=item.content.split(/(?<=[。！？!?])\s*/).slice(0,3).join("");
- const modal=expanded&&typeof document!=="undefined"?createPortal(<div className="fixed inset-0 z-[70] flex items-start justify-center bg-background/70 px-4 pt-24" onClick={()=>setExpanded(false)}><div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1} className="max-h-[min(70vh,560px)] w-full max-w-[560px] overflow-y-auto rounded-md border border-border bg-panel p-5 shadow-lg outline-none" onClick={e=>e.stopPropagation()}><h2 className="text-sm font-semibold">{heading}（{announcements.length}）</h2><div className="mt-3 space-y-4">{announcements.map(a=><article key={a.id}><h3 className="text-sm font-medium">{a.title}</h3><p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{a.content}</p><p className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(a.created_at)}</p></article>)}</div></div></div>,document.body):null;
- return <><section aria-label="公告" className={cn("announcement-rail flex min-h-0 flex-col rounded-sm border border-border bg-muted/25",className)}><div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3"><Megaphone size={15} className="shrink-0 text-primary"/><button type="button" aria-expanded={expanded} onClick={()=>setExpanded(v=>!v)} className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-xs font-medium text-muted-foreground"><span className="truncate">{heading}（{announcements.length}） · {item.title}</span><ChevronDown size={14} className={cn("shrink-0",expanded&&"rotate-180")}/></button></div>{!expanded&&<div className="relative min-h-[200px] flex-1 overflow-hidden rounded-b-sm"><div className="absolute inset-0 overflow-hidden px-4"><p className="pt-4 text-sm font-medium leading-6">{item.title}</p><p className="mt-2 line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{preview}</p><p className="mt-4 text-[11px] text-muted-foreground">{formatDateTime(item.created_at)}</p></div></div>}{!expanded&&<button type="button" onClick={()=>setExpanded(true)} className="flex items-center justify-center gap-1 border-t border-border px-4 py-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/5">展开全部 <ChevronDown size={14}/></button>}</section>{modal}</>;
+
+interface AnnouncementsNoticeProps {
+  announcements: Announcement[];
+  className?: string;
+  heading?: string;
+}
+
+function PublishedTime({ item }: { item: Announcement }) {
+  const value = item.published_at ?? item.created_at;
+  if (!Number.isFinite(Date.parse(value))) return null;
+  return <time dateTime={value} className="block text-xs text-muted-foreground">发布于 {formatDateTime(value)}</time>;
+}
+
+export function AnnouncementsNotice({ announcements, className, heading = "公告" }: AnnouncementsNoticeProps) {
+  const id = useId();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const latest = announcements[0];
+  if (!latest) return null;
+
+  return (
+    <section aria-labelledby={`${id}-heading`} className={cn("announcement-rail min-w-0 rounded-sm border border-border bg-muted/25", className)}>
+      <h2 id={`${id}-heading`} className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold">
+        <Megaphone size={15} aria-hidden="true" className="shrink-0 text-primary" />
+        {heading}（{announcements.length}）
+      </h2>
+      <div className="space-y-2 px-4 py-3">
+        <h3 className="line-clamp-2 break-words text-sm font-medium">{latest.title}</h3>
+        <p className="line-clamp-5 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{latest.content}</p>
+        <PublishedTime item={latest} />
+      </div>
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-controls={id}
+        onClick={event => {
+          event.currentTarget.focus({ preventScroll: true });
+          dialog.current?.showModal();
+        }}
+        className="flex min-h-11 w-full items-center justify-center gap-1 border-t border-border px-4 py-2 text-xs font-medium text-primary hover:bg-primary/5"
+      >
+        查看全部{heading} <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      <dialog
+        id={id}
+        ref={dialog}
+        aria-labelledby={`${id}-title`}
+        onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close(); }}
+        className="fixed inset-0 m-auto w-[min(35rem,calc(100%-2rem))] max-w-full overflow-hidden rounded-lg border border-border bg-panel p-0 text-foreground shadow-lg backdrop:bg-black/50"
+      >
+        <div className="flex max-h-[80dvh] flex-col">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
+            <h2 id={`${id}-title`} className="font-semibold">全部{heading}（{announcements.length}）</h2>
+            <button type="button" onClick={() => dialog.current?.close()} aria-label={`关闭${heading}`} className="flex h-11 w-11 items-center justify-center rounded text-muted-foreground hover:bg-muted">
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+          <div role="region" aria-label={`${heading}列表`} tabIndex={0} className="space-y-5 overflow-y-auto overscroll-contain p-4">
+            {announcements.map(item => (
+              <article key={item.id} className="space-y-1.5 break-words">
+                <h3 className="text-sm font-medium">{item.title}</h3>
+                <p className="whitespace-pre-wrap text-sm leading-6">{item.content}</p>
+                <PublishedTime item={item} />
+              </article>
+            ))}
+          </div>
+        </div>
+      </dialog>
+    </section>
+  );
 }

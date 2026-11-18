@@ -33,32 +33,40 @@ export function AccountPanel({
         <CardHeader>
           <CardTitle>管理员资料</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent><form className="space-y-4" onSubmit={(event) => {
+          event.preventDefault();
+          onUpdateProfile({ display_name: displayName.trim() || null });
+        }}>
           <div>
-            <Label>用户名</Label>
+            <div className="text-sm font-medium">用户名</div>
             <div className="rounded-md border border-border bg-muted/35 px-3 py-2 text-sm">{admin?.username ?? "--"}</div>
           </div>
           <div>
             <Label htmlFor="admin-display-name">显示名</Label>
-            <Input id="admin-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            <Input id="admin-display-name" maxLength={120} disabled={savingProfile} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </div>
-          <Button disabled={savingProfile} onClick={() => onUpdateProfile({ display_name: displayName.trim() || null })}>
+          <Button type="submit" disabled={savingProfile}>
             {savingProfile ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
             保存资料
           </Button>
-        </CardContent>
+        </form></CardContent>
       </Card>
 
       <Card className="border-border bg-panel shadow-sm">
         <CardHeader>
           <CardTitle>修改密码</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent><form className="space-y-4" onSubmit={(event) => {
+          event.preventDefault();
+          onUpdatePassword({ old_password: oldPassword, new_password: newPassword });
+        }}>
+          <p className="text-xs text-muted-foreground">更新后，其他管理会话将失效。</p>
           <div>
             <Label htmlFor="admin-old-password">旧密码</Label>
             <Input
               id="admin-old-password"
               type="password"
+              autoComplete="current-password" required maxLength={128} disabled={savingPassword}
               value={oldPassword}
               onChange={(event) => setOldPassword(event.target.value)}
             />
@@ -68,23 +76,17 @@ export function AccountPanel({
             <Input
               id="admin-new-password"
               type="password"
+              autoComplete="new-password" required maxLength={128} disabled={savingPassword}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               minLength={8}
             />
           </div>
-          <Button
-            disabled={savingPassword || oldPassword.length === 0 || newPassword.length < 8}
-            onClick={() => {
-              onUpdatePassword({ old_password: oldPassword, new_password: newPassword });
-              setOldPassword("");
-              setNewPassword("");
-            }}
-          >
+          <Button type="submit" disabled={savingPassword || !oldPassword || newPassword.length < 8}>
             {savingPassword ? <Loader2 className="animate-spin" size={16} /> : <KeyRound size={16} />}
             更新密码
           </Button>
-        </CardContent>
+        </form></CardContent>
       </Card>
       </div>
     </section>

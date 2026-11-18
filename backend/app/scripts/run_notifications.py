@@ -10,7 +10,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.limit is not None and args.limit < 0:
+        parser.error("--limit must be non-negative")
     result = run_low_power_notifications(limit=args.limit)
     print(
         f"scanned={result.scanned} sent={result.sent} "

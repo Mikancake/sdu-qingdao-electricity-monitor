@@ -4,7 +4,7 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Input, Label } from "../ui/input";
 import { Loader2, Save, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 type RuntimeNumberSettingKey =
   | "check_interval_seconds"
@@ -42,10 +42,10 @@ export function RuntimeSettingsPanel({
   cleaningRetention,
   clearingRateLimits
 }: {
-  runtime?: RuntimeSettings;
-  appearance?: AppearanceSettings | null;
-  onSave: (payload: Partial<RuntimeSettings>) => void;
-  onSaveAppearance: (payload: Partial<AppearanceSettings>) => void;
+  runtime: RuntimeSettings;
+  appearance: AppearanceSettings;
+  onSave: (payload: Partial<RuntimeSettings>, onSuccess: () => void) => void;
+  onSaveAppearance: (payload: Partial<AppearanceSettings>, onSuccess: () => void) => void;
   onUploadAppearanceBackground: (
     theme: "light" | "dark",
     file: File
@@ -57,27 +57,27 @@ export function RuntimeSettingsPanel({
   cleaningRetention: boolean;
   clearingRateLimits: boolean;
 }) {
-  const [form, setForm] = useState<RuntimeSettings | null>(null);
+  const [edits, setEdits] = useState<Partial<Record<RuntimeNumberSettingKey, string>>>({});
   const [rateLimitIp, setRateLimitIp] = useState("");
   const [rateLimitIdentity, setRateLimitIdentity] = useState("");
   const [rateLimitBucket, setRateLimitBucket] = useState("");
 
-  useEffect(() => {
-    if (runtime) setForm(runtime);
-  }, [runtime]);
-
-  if (!form) {
-    return (
-      <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 animate-spin" size={18} />
-        正在读取设置
-      </div>
-    );
-  }
-
+  const form = { ...runtime, ...edits };
   function setNumber(key: RuntimeNumberSettingKey, value: string) {
-    setForm((current) => (current ? { ...current, [key]: Number(value) } : current));
+    setEdits((current) => ({ ...current, [key]: value }));
   }
+  function saveSection(hwgl: boolean) {
+    const changed = (Object.keys(edits) as RuntimeNumberSettingKey[]).filter((key) => key.startsWith("hwgl_") === hwgl);
+    const payload: Partial<RuntimeSettings> = {};
+    for (const key of changed) payload[key] = Number(edits[key]);
+    onSave(payload, () => setEdits((current) => {
+      const next = { ...current };
+      for (const key of changed) delete next[key];
+      return next;
+    }));
+  }
+  const hasGlobalEdits = Object.keys(edits).some((key) => !key.startsWith("hwgl_"));
+  const hasHwglEdits = Object.keys(edits).some((key) => key.startsWith("hwgl_"));
 
   return (
     <div className="grid gap-5">
@@ -92,21 +92,23 @@ export function RuntimeSettingsPanel({
       <CardHeader>
         <CardTitle>全局任务设置</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent><form onSubmit={(event) => { event.preventDefault(); saveSection(false); }}>
+        <fieldset disabled={saving || cleaningRetention} className="min-w-0 space-y-4" aria-label="全局任务设置">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           <div>
             <Label htmlFor="check-interval">同步周期（秒）</Label>
-            <Input id="check-interval" type="number" value={form.check_interval_seconds} onChange={(event) => setNumber("check_interval_seconds", event.target.value)} />
+            <Input id="check-interval" type="number" required min={60} max={604800} value={form.check_interval_seconds} onChange={(event) => setNumber("check_interval_seconds", event.target.value)} />
           </div>
           <div>
             <Label htmlFor="check-batch">每轮检查数量</Label>
-            <Input id="check-batch" type="number" value={form.check_batch_size} onChange={(event) => setNumber("check_batch_size", event.target.value)} />
+            <Input id="check-batch" type="number" required min={1} max={5000} value={form.check_batch_size} onChange={(event) => setNumber("check_batch_size", event.target.value)} />
           </div>
           <div>
             <Label htmlFor="request-delay">请求间隔（秒）</Label>
             <Input
               id="request-delay"
               type="number"
+              min={0} max={60} required
               step="0.1"
               value={form.check_request_delay_seconds}
               onChange={(event) => setNumber("check_request_delay_seconds", event.target.value)}
@@ -114,17 +116,18 @@ export function RuntimeSettingsPanel({
           </div>
           <div>
             <Label htmlFor="notify-interval">通知扫描周期（秒）</Label>
-            <Input id="notify-interval" type="number" value={form.notify_interval_seconds} onChange={(event) => setNumber("notify_interval_seconds", event.target.value)} />
+            <Input id="notify-interval" type="number" required min={60} max={604800} value={form.notify_interval_seconds} onChange={(event) => setNumber("notify_interval_seconds", event.target.value)} />
           </div>
           <div>
             <Label htmlFor="notify-cooldown">通知冷却（小时）</Label>
-            <Input id="notify-cooldown" type="number" value={form.notify_cooldown_hours} onChange={(event) => setNumber("notify_cooldown_hours", event.target.value)} />
+            <Input id="notify-cooldown" type="number" required min={1} max={720} value={form.notify_cooldown_hours} onChange={(event) => setNumber("notify_cooldown_hours", event.target.value)} />
           </div>
           <div>
             <Label htmlFor="default-alert-days">默认提醒天数</Label>
             <Input
               id="default-alert-days"
               type="number"
+              required
               min={1}
               max={30}
               value={form.default_alert_days}
@@ -136,6 +139,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="default-daily-usage"
               type="number"
+              required
               min={0.1}
               max={100}
               step="0.1"
@@ -145,13 +149,14 @@ export function RuntimeSettingsPanel({
           </div>
           <div>
             <Label htmlFor="worker-idle">Worker 空闲轮询（秒）</Label>
-            <Input id="worker-idle" type="number" value={form.worker_idle_seconds} onChange={(event) => setNumber("worker_idle_seconds", event.target.value)} />
+            <Input id="worker-idle" type="number" required min={1} max={300} value={form.worker_idle_seconds} onChange={(event) => setNumber("worker_idle_seconds", event.target.value)} />
           </div>
           <div>
             <Label htmlFor="manual-cooldown">手动同步冷却（秒）</Label>
             <Input
               id="manual-cooldown"
               type="number"
+              min={0} max={3600} required
               value={form.manual_check_cooldown_seconds}
               onChange={(event) => setNumber("manual_check_cooldown_seconds", event.target.value)}
             />
@@ -161,6 +166,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="max-rooms-per-user"
               type="number"
+              required
               min={1}
               max={100}
               value={form.max_rooms_per_user}
@@ -172,6 +178,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="verification-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.verification_code_retention_days}
               onChange={(event) => setNumber("verification_code_retention_days", event.target.value)}
@@ -182,6 +189,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="attempt-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.check_attempt_retention_days}
               onChange={(event) => setNumber("check_attempt_retention_days", event.target.value)}
@@ -192,6 +200,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="notification-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.notification_retention_days}
               onChange={(event) => setNumber("notification_retention_days", event.target.value)}
@@ -202,6 +211,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="reading-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.electricity_reading_retention_days}
               onChange={(event) => setNumber("electricity_reading_retention_days", event.target.value)}
@@ -212,6 +222,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="audit-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.admin_audit_log_retention_days}
               onChange={(event) => setNumber("admin_audit_log_retention_days", event.target.value)}
@@ -222,6 +233,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="scheduled-job-retention"
               type="number"
+              max={3650} required
               min={0}
               value={form.scheduled_job_run_retention_days}
               onChange={(event) => setNumber("scheduled_job_run_retention_days", event.target.value)}
@@ -232,6 +244,7 @@ export function RuntimeSettingsPanel({
             <Input
               id="cleanup-hour"
               type="number"
+              required
               min={0}
               max={23}
               value={form.retention_cleanup_hour}
@@ -240,19 +253,21 @@ export function RuntimeSettingsPanel({
           </div>
         </div>
         <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          保留天数填 0 表示不自动清理。worker 会每天按上面的时间执行一次，也可以在这里手动清理已过期数据。
+          保留天数为 0 的项目不会清理。立即清理使用已保存的策略；如已修改，请先保存设置。
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={saving} onClick={() => onSave(form)}>
+          <Button type="submit" disabled={saving || !hasGlobalEdits}>
             {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
             保存全局设置
           </Button>
-          <Button disabled={cleaningRetention} onClick={onRunDataRetentionCleanup} variant="secondary">
+          <Button type="button" disabled={saving || cleaningRetention || hasGlobalEdits} onClick={() => {
+            if (window.confirm("按已保存的保留策略立即删除过期数据？删除后无法恢复。")) onRunDataRetentionCleanup();
+          }} variant="secondary">
             {cleaningRetention ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
             立即清理过期数据
           </Button>
         </div>
-      </CardContent>
+        </fieldset></form></CardContent>
       </Card>
 
       <Card className="border-border bg-panel shadow-none">
@@ -262,13 +277,15 @@ export function RuntimeSettingsPanel({
             这些设置只影响使用新电费系统的宿舍。元数据同步由 worker 执行，实时性探测仍然需要在“实时性”页面手动启动。
           </p>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent><form onSubmit={(event) => { event.preventDefault(); saveSection(true); }}>
+          <fieldset disabled={saving} className="min-w-0 space-y-4" aria-label="HWGL 设置">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div>
               <Label htmlFor="hwgl-sync-interval">扩展数据同步周期（秒）</Label>
               <Input
                 id="hwgl-sync-interval"
                 type="number"
+                required max={604800}
                 min={60}
                 value={form.hwgl_metadata_sync_interval_seconds}
                 onChange={(event) => setNumber("hwgl_metadata_sync_interval_seconds", event.target.value)}
@@ -279,6 +296,7 @@ export function RuntimeSettingsPanel({
               <Input
                 id="hwgl-history-days"
                 type="number"
+                required max={365}
                 min={1}
                 value={form.hwgl_metadata_history_days}
                 onChange={(event) => setNumber("hwgl_metadata_history_days", event.target.value)}
@@ -289,6 +307,7 @@ export function RuntimeSettingsPanel({
               <Input
                 id="hwgl-recharge-days"
                 type="number"
+                required max={730}
                 min={1}
                 value={form.hwgl_recharge_history_days}
                 onChange={(event) => setNumber("hwgl_recharge_history_days", event.target.value)}
@@ -299,6 +318,7 @@ export function RuntimeSettingsPanel({
               <Input
                 id="hwgl-probe-duration"
                 type="number"
+                required max={86400}
                 min={60}
                 value={form.hwgl_probe_max_duration_seconds}
                 onChange={(event) => setNumber("hwgl_probe_max_duration_seconds", event.target.value)}
@@ -306,13 +326,13 @@ export function RuntimeSettingsPanel({
             </div>
           </div>
           <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            修改后由 worker 读取最新值。探测间隔仍只允许 60、120、300 秒，最长持续时间还会受到服务器环境变量上限约束。
+            修改后由 worker 读取最新值。探测间隔可选 60–3600 秒，最长持续时间还会受到服务器环境变量上限约束。
           </div>
-          <Button disabled={saving} onClick={() => onSave(form)}>
+          <Button type="submit" disabled={saving || !hasHwglEdits}>
             {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
             保存 HWGL 设置
           </Button>
-        </CardContent>
+          </fieldset></form></CardContent>
       </Card>
 
       <Card className="border-border bg-panel shadow-none">
@@ -359,17 +379,15 @@ export function RuntimeSettingsPanel({
             </div>
           </div>
           <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            只填 IP 会清除这个 IP 的全部匹配记录；只填邮箱会清除这个邮箱的匹配记录；都不填则会清除所有内存限流记录。
+            选择限制类型、填写 IP 或邮箱可缩小范围。不指定任何条件将清除所有内存限流记录。
           </div>
           <Button
             disabled={clearingRateLimits}
-            onClick={() =>
-              onClearRateLimits({
-                bucket: rateLimitBucket || null,
-                client_ip: rateLimitIp.trim() || null,
-                identity: rateLimitIdentity.trim() || null
-              })
-            }
+            onClick={() => {
+              const filters = { bucket: rateLimitBucket || null, client_ip: rateLimitIp.trim() || null, identity: rateLimitIdentity.trim() || null };
+              const scope = [filters.bucket && `类型：${filters.bucket}`, filters.client_ip && `IP：${filters.client_ip}`, filters.identity && `账号：${filters.identity}`].filter(Boolean).join("；");
+              if (window.confirm(scope ? `确定清除匹配的限流记录（${scope}）吗？` : "未指定任何条件。确定清除所有类型、所有用户的限流记录吗？")) onClearRateLimits(filters);
+            }}
             variant="secondary"
           >
             {clearingRateLimits ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}

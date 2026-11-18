@@ -27,7 +27,7 @@ def current_user(
     payload = decode_access_token(credentials.credentials)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
-    if payload.get("kind", "user") != "user":
+    if payload.get("kind") != "user":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid user token")
 
     try:
@@ -57,19 +57,12 @@ def optional_user(
     Used by endpoints that serve slightly different content to signed-in users
     without requiring a login.
     """
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        return None
-    payload = decode_access_token(credentials.credentials)
-    if payload is None or payload.get("kind", "user") != "user":
-        return None
     try:
-        user_id = int(payload["sub"])
-    except (TypeError, ValueError):
+        return verified_user(current_user(credentials, db))
+    except HTTPException as exc:
+        if exc.status_code not in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN):
+            raise
         return None
-    user = db.get(User, user_id)
-    if user is None or not token_matches_credentials(payload, user.password_hash):
-        return None
-    return user
 
 
 def current_admin(

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ router = APIRouter()
 
 @router.get("", response_model=list[AnnouncementOut])
 def list_published_announcements(
+    response: Response,
     viewer: User | None = Depends(optional_user),
     db: Session = Depends(db_session),
 ) -> list[Announcement]:
@@ -24,6 +25,8 @@ def list_published_announcements(
     Visitors who are not signed in only receive ``public`` announcements; a
     signed-in user also receives the login-only ones.
     """
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Vary"] = "Authorization"
     stmt = (
         select(Announcement)
         .where(Announcement.is_published.is_(True))

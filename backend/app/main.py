@@ -1,13 +1,22 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.core.config import settings, validate_runtime_safety
 from app.core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware, resolve_trusted_hosts
+
+
+async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # Pydantic's `input` can be the whole body (e.g. a missing field in a
+    # login form); it does not belong in an error returned to the client.
+    detail = [{key: err[key] for key in ("loc", "msg", "type")} for err in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 def create_app() -> FastAPI:
@@ -19,6 +28,7 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.debug else None,
         openapi_url="/openapi.json" if settings.debug else None,
     )
+    app.add_exception_handler(RequestValidationError, request_validation_error)
     origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
     app.add_middleware(
         RequestBodyLimitMiddleware,

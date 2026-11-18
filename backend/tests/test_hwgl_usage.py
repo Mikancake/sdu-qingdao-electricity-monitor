@@ -1,6 +1,13 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.db.base import Base
+from app.models.room import Room
+from app.services import usage
+
 from app.models.electricity_reading import ElectricityReading
 from app.services.usage import build_usage_stats, calculate_average_daily_usage
 
@@ -302,3 +309,43 @@ def test_balance_drop_short_window_is_not_extrapolated() -> None:
 
     assert average.value is None
     assert average.source == "insufficient"
+
+
+def test_limited_stats_select_newest_points_then_return_chronological(monkeypatch) -> None:
+    base = datetime(2026, 8, 24, 12)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base + timedelta(days=3)
+
+    monkeypatch.setattr(usage, "datetime", Clock)
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        room = Room(id=1, building_name="test", building_param="test", room_number="101", provider="hwgl", provider_price=2)
+        db.add(room)
+        db.flush()
+        newest = reading(3, "1", base, provider="hwgl", provider_updated_at=base + timedelta(days=2))
+        newest.electricity_price = Decimal("0.00")
+        db.add_all([
+            reading(1, "40", base + timedelta(days=2), provider="hwgl", provider_updated_at=base),
+            reading(2, "30", base, provider="hwgl", provider_updated_at=base + timedelta(days=1)),
+            newest,
+        ])
+        db.commit()
+        stats, points = usage.get_room_usage_stats(db, room.id, days=4, limit=2, alert_days=1,
+                                                  alert_threshold_mode="fixed", fixed_threshold=Decimal("2"))
+        assert [point.id for point in points] == [2, 3]
+        assert stats.latest_balance == Decimal("1.00") and stats.is_low_power
+        assert stats.electricity_price == stats.estimated_amount == Decimal("0.00")
+
+
+def test_arrears_keep_negative_balance_but_no_remaining_days() -> None:
+    stats = build_usage_stats(
+        [reading(1, "-1.00", datetime(2026, 8, 24, 12))], alert_days=1,
+        alert_threshold_mode="days", fixed_threshold=None, default_daily_usage_kwh=3,
+    )
+    assert stats.latest_balance == Decimal("-1.00")
+    assert stats.days_remaining == Decimal("0.00")
+    assert stats.is_low_power and stats.status == "low"

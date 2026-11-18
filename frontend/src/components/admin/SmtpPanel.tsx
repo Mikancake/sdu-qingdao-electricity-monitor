@@ -8,11 +8,12 @@ import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar, LogToolbar } from "./toolbars";
 import { compareDate, compareNumber, compareText, healthLabel, healthTone, LogFilters, matchesSearch } from "./utils";
 import { Edit3, Loader2, Mail, Save, Trash2, X } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useMemo, useState } from "react";
 
 export function SmtpPanel({
   accounts,
   logs,
+  listProblem, logsProblem, loading,
   onCreate,
   onUpdate,
   onDelete,
@@ -25,6 +26,7 @@ export function SmtpPanel({
 }: {
   accounts: SmtpSettings[];
   logs: SmtpHealthLog[];
+  listProblem: ReactNode; logsProblem: ReactNode; loading: boolean;
   onCreate: (payload: {
     name: string;
     host: string;
@@ -36,10 +38,10 @@ export function SmtpPanel({
     min_interval_seconds: number;
     use_ssl: boolean;
     use_starttls: boolean;
-  }) => void;
+  }, onSuccess: () => void) => void;
   onUpdate: (
     smtpId: number,
-    payload: Partial<SmtpSettings> & { password?: string | null }
+    payload: Partial<SmtpSettings> & { password?: string | null }, onSuccess?: () => void
   ) => void;
   onDelete: (smtpId: number) => void;
   onTest: (smtpId: number, email: string) => void;
@@ -113,12 +115,9 @@ export function SmtpPanel({
       min_interval_seconds: interval,
       use_ssl: useSsl,
       use_starttls: useStarttls
+    }, () => {
+      setName(""); setHost(""); setUsername(""); setPassword(""); setFromEmail("");
     });
-    setName("");
-    setHost("");
-    setUsername("");
-    setPassword("");
-    setFromEmail("");
   }
 
   function startEdit(item: SmtpSettings) {
@@ -147,13 +146,11 @@ export function SmtpPanel({
       min_interval_seconds: editInterval,
       use_ssl: editUseSsl,
       use_starttls: editUseStarttls
-    });
-    setEditingId(null);
-    setEditPassword("");
+    }, () => { setEditingId(null); setEditPassword(""); });
   }
 
   return (
-    <div className="grid gap-5">
+    <fieldset aria-label="SMTP 管理" disabled={saving} aria-busy={saving} className="grid min-w-0 gap-5">
       <Card className="border-border bg-panel shadow-none">
         <CardHeader>
           <CardTitle>添加 SMTP 发件邮箱</CardTitle>
@@ -162,15 +159,15 @@ export function SmtpPanel({
           <form className="grid gap-3 md:grid-cols-2" onSubmit={submit}>
             <div>
               <Label htmlFor="smtp-name">名称</Label>
-              <Input id="smtp-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="smtp-1" required />
+              <Input id="smtp-name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="smtp-1" required />
             </div>
             <div>
               <Label htmlFor="smtp-host">SMTP Host</Label>
-              <Input id="smtp-host" value={host} onChange={(event) => setHost(event.target.value)} required />
+              <Input id="smtp-host" maxLength={255} value={host} onChange={(event) => setHost(event.target.value)} required />
             </div>
             <div>
               <Label htmlFor="smtp-port">端口</Label>
-              <Input id="smtp-port" type="number" value={port} onChange={(event) => setPort(Number(event.target.value))} />
+              <Input id="smtp-port" type="number" min={1} max={65535} required value={port} onChange={(event) => setPort(Number(event.target.value))} />
             </div>
             <div>
               <Label htmlFor="smtp-user">用户名</Label>
@@ -182,19 +179,19 @@ export function SmtpPanel({
             </div>
             <div>
               <Label htmlFor="smtp-password">密码 / 授权码</Label>
-              <Input id="smtp-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <Input id="smtp-password" type="password" autoComplete="new-password" maxLength={255} value={password} onChange={(event) => setPassword(event.target.value)} />
             </div>
             <div>
               <Label htmlFor="smtp-interval">最小间隔（秒）</Label>
-              <Input id="smtp-interval" type="number" min={0} value={interval} onChange={(event) => setInterval(Number(event.target.value))} />
+              <Input id="smtp-interval" type="number" min={0} max={3600} value={interval} onChange={(event) => setInterval(Number(event.target.value))} />
             </div>
             <div className="flex items-end gap-4 pb-2">
               <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <input className="h-4 w-4 accent-primary" type="checkbox" checked={useSsl} onChange={(event) => setUseSsl(event.target.checked)} />
+                <input className="h-4 w-4 accent-primary" type="checkbox" checked={useSsl} onChange={(event) => { setUseSsl(event.target.checked); if (event.target.checked) setUseStarttls(false); }} />
                 SSL
               </label>
               <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <input className="h-4 w-4 accent-primary" type="checkbox" checked={useStarttls} onChange={(event) => setUseStarttls(event.target.checked)} />
+                <input className="h-4 w-4 accent-primary" type="checkbox" checked={useStarttls} onChange={(event) => { setUseStarttls(event.target.checked); if (event.target.checked) setUseSsl(false); }} />
                 STARTTLS
               </label>
             </div>
@@ -227,6 +224,7 @@ export function SmtpPanel({
               { value: "failures_desc", label: "失败次数从多到少" }
             ]}
           />
+          {listProblem || (loading ? <ListSkeleton rows={4} /> : (
           <div className="responsive-table-shell rounded-lg border border-border">
             <table className="responsive-table w-full border-collapse text-sm">
               <thead className="bg-muted text-left text-xs text-muted-foreground">
@@ -257,7 +255,7 @@ export function SmtpPanel({
                       {editingId === item.id ? (
                         <>
                           <td data-label="名称" className="px-4 py-3">
-                            <Input value={editName} onChange={(event) => setEditName(event.target.value)} />
+                            <Input aria-label="SMTP 名称" maxLength={80} required form={`edit-smtp-${item.id}`} value={editName} onChange={(event) => setEditName(event.target.value)} />
                             <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                               <input className="h-4 w-4 accent-primary" type="checkbox" checked={editEnabled} onChange={(event) => setEditEnabled(event.target.checked)} />
                               启用
@@ -265,19 +263,19 @@ export function SmtpPanel({
                           </td>
                           <td data-label="地址" className="px-4 py-3">
                             <div className="grid gap-2">
-                              <Input value={editHost} onChange={(event) => setEditHost(event.target.value)} placeholder="SMTP Host" />
-                              <Input type="number" value={editPort} onChange={(event) => setEditPort(Number(event.target.value))} placeholder="端口" />
-                              <Input value={editUsername} onChange={(event) => setEditUsername(event.target.value)} placeholder="用户名" />
-                              <Input type="email" value={editFromEmail} onChange={(event) => setEditFromEmail(event.target.value)} placeholder="发件邮箱" />
-                              <Input type="password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder={item.password_configured ? "已保存，留空不修改" : "密码 / 授权码"} />
-                              <Input type="number" min={0} value={editInterval} onChange={(event) => setEditInterval(Number(event.target.value))} placeholder="最小间隔" />
+                              <Input aria-label="SMTP Host" form={`edit-smtp-${item.id}`} required value={editHost} onChange={(event) => setEditHost(event.target.value)} placeholder="SMTP Host" />
+                              <Input aria-label="端口" form={`edit-smtp-${item.id}`} type="number" min={1} max={65535} required value={editPort} onChange={(event) => setEditPort(Number(event.target.value))} placeholder="端口" />
+                              <Input aria-label="用户名" form={`edit-smtp-${item.id}`}  value={editUsername} onChange={(event) => setEditUsername(event.target.value)} placeholder="用户名" />
+                              <Input aria-label="发件邮箱" form={`edit-smtp-${item.id}`} type="email" required value={editFromEmail} onChange={(event) => setEditFromEmail(event.target.value)} placeholder="发件邮箱" />
+                              <Input aria-label="密码 / 授权码" form={`edit-smtp-${item.id}`} type="password" autoComplete="new-password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder={item.password_configured ? "已保存，留空不修改" : "密码 / 授权码"} />
+                              <Input aria-label="最小间隔（秒）" form={`edit-smtp-${item.id}`} type="number" min={0} max={3600} required value={editInterval} onChange={(event) => setEditInterval(Number(event.target.value))} placeholder="最小间隔（秒）" />
                               <div className="flex gap-4 text-xs text-muted-foreground">
                                 <label className="inline-flex items-center gap-2">
-                                  <input className="h-4 w-4 accent-primary" type="checkbox" checked={editUseSsl} onChange={(event) => setEditUseSsl(event.target.checked)} />
+                                  <input className="h-4 w-4 accent-primary" type="checkbox" checked={editUseSsl} onChange={(event) => { setEditUseSsl(event.target.checked); if (event.target.checked) setEditUseStarttls(false); }} />
                                   SSL
                                 </label>
                                 <label className="inline-flex items-center gap-2">
-                                  <input className="h-4 w-4 accent-primary" type="checkbox" checked={editUseStarttls} onChange={(event) => setEditUseStarttls(event.target.checked)} />
+                                  <input className="h-4 w-4 accent-primary" type="checkbox" checked={editUseStarttls} onChange={(event) => { setEditUseStarttls(event.target.checked); if (event.target.checked) setEditUseSsl(false); }} />
                                   STARTTLS
                                 </label>
                               </div>
@@ -288,14 +286,14 @@ export function SmtpPanel({
                           </td>
                           <td data-label="测试" className="px-4 py-3 text-muted-foreground">保存后测试</td>
                           <td data-label="操作" className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
-                              <Button size="icon" variant="secondary" title="保存" onClick={() => saveEdit(item)}>
+                            <form id={`edit-smtp-${item.id}`} className="flex justify-end gap-2" onSubmit={(event) => { event.preventDefault(); saveEdit(item); }}>
+                              <Button disabled={!editName.trim() || !editHost.trim()} size="icon" type="submit" variant="secondary" title="保存">
                                 <Save size={15} />
                               </Button>
-                              <Button size="icon" variant="ghost" title="取消" onClick={() => setEditingId(null)}>
+                              <Button type="button" size="icon" variant="ghost" title="取消" onClick={() => { setEditingId(null); setEditPassword(""); }}>
                                 <X size={15} />
                               </Button>
-                            </div>
+                            </form>
                           </td>
                         </>
                       ) : (
@@ -321,8 +319,9 @@ export function SmtpPanel({
                             ) : null}
                           </td>
                           <td data-label="测试" className="px-4 py-3">
-                            <div className="flex min-w-0 gap-2 sm:min-w-[240px]">
+                            <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); onTest(item.id, (testEmails[item.id] ?? "").trim()); }}>
                               <Input
+                                aria-label={`测试 ${item.name} 的收件邮箱`} required
                                 type="email"
                                 value={testEmails[item.id] ?? ""}
                                 onChange={(event) => setTestEmails((prev) => ({ ...prev, [item.id]: event.target.value }))}
@@ -333,11 +332,11 @@ export function SmtpPanel({
                                 variant="secondary"
                                 disabled={testingSmtpId === item.id || !(testEmails[item.id] ?? "").trim()}
                                 title="测试 SMTP"
-                                onClick={() => onTest(item.id, (testEmails[item.id] ?? "").trim())}
+                                type="submit"
                               >
                                 {testingSmtpId === item.id ? <Loader2 className="animate-spin" size={15} /> : <Mail size={15} />}
                               </Button>
-                            </div>
+                            </form>
                           </td>
                           <td data-label="操作" className="px-4 py-3">
                             <div className="flex flex-wrap justify-end gap-2">
@@ -360,6 +359,7 @@ export function SmtpPanel({
               </tbody>
             </table>
           </div>
+          ))}
         </CardContent>
       </Card>
 
@@ -369,7 +369,7 @@ export function SmtpPanel({
         </CardHeader>
         <CardContent>
           <LogToolbar filters={logFilters} onChange={onLogFiltersChange} />
-          {logsLoading ? (
+          {logsProblem || (logsLoading ? (
             <ListSkeleton rows={4} />
           ) : (
             <div className="responsive-table-shell rounded-lg border border-border">
@@ -399,12 +399,12 @@ export function SmtpPanel({
                       <td data-label="来源" className="px-4 py-3 text-muted-foreground">{log.source}</td>
                       <td data-label="收件人" className="px-4 py-3 text-muted-foreground">{log.recipient_email ?? "-"}</td>
                       <td data-label="结果" className="px-4 py-3">
-                        <Badge tone={log.success ? "success" : healthTone(log.health_status)}>
-                          {log.success ? "成功" : healthLabel(log.health_status)}
+                        <Badge tone={log.success ? "success" : "danger"}>
+                          {log.success ? "成功" : "失败"}
                         </Badge>
                       </td>
                       <td data-label="错误" className="px-4 py-3 text-muted-foreground">
-                        {log.error_kind ? `${log.error_kind}: ${log.error_msg ?? ""}` : "-"}
+                        {[log.error_kind, log.error_msg].filter(Boolean).join(": ") || "-"}
                       </td>
                     </tr>
                   ))
@@ -412,9 +412,9 @@ export function SmtpPanel({
               </tbody>
             </table>
           </div>
-          )}
+          ))}
         </CardContent>
       </Card>
-    </div>
+    </fieldset>
   );
 }

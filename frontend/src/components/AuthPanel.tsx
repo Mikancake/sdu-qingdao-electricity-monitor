@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, BatteryCharging, Bell, Building2, Eye, EyeOff, Loader2, Mail, ShieldCheck } from "lucide-react";
 import type { Announcement } from "../lib/types";
 import { ApiError, createApiClient, getApiErrorMessage } from "../lib/api";
@@ -21,6 +21,9 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const submitting = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const previousMode = useRef(mode);
 
   useEffect(() => {
     let active = true;
@@ -28,7 +31,17 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
     return () => { active = false; };
   }, [api]);
 
+  useEffect(() => {
+    if (previousMode.current === mode) return;
+    const verified = previousMode.current === "verify" && mode === "login" && password !== "";
+    previousMode.current = mode;
+    const field = formRef.current?.elements.namedItem(mode === "verify" ? "code" : verified ? "password" : "email");
+    if (field instanceof HTMLInputElement) field.focus();
+  }, [mode, password]);
+
   function changeMode(next: AuthMode) {
+    if (submitting.current || mode === next) return;
+    if (mode === "login" || next === "login") setPassword("");
     setMode(next);
     setMessage(null);
     setError(null);
@@ -39,37 +52,47 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setLoading(true);
     setError(null);
     setMessage(null);
+    const credentials = { email: email.trim(), password };
     try {
       if (mode === "login") {
-        const response = await api.login({ email, password });
+        const response = await api.login(credentials);
         onLogin(response.access_token);
         return;
       }
       if (mode === "register") {
-        const response = await api.register({ email, password });
+        const response = await api.register(credentials);
+        if (!response.email_sent && !response.dev_verification_code) {
+          setError("未发送验证码，请稍后重新提交注册。");
+          return;
+        }
+        setShowPassword(false);
         setDevCode(response.dev_verification_code ?? null);
         setMode("verify");
         setMessage(response.email_sent ? "验证码已发送，请检查邮箱。" : "开发模式已返回验证码。");
         return;
       }
-      if (code.trim().length < 4) {
-        setError("验证码至少需要 4 位，请检查后再提交。");
-        return;
-      }
-      await api.verifyEmail({ email, code, password });
+      await api.verifyEmail({ ...credentials, code });
+      setCode("");
+      setDevCode(null);
       setMode("login");
       setMessage("邮箱已验证，可以登录。");
     } catch (err) {
       if (mode === "register" && err instanceof ApiError && err.detail && typeof err.detail === "object" && "kind" in err.detail && err.detail.kind === "verification_email_cooldown") {
+        setShowPassword(false);
         setMode("verify");
-        setMessage("验证码刚刚发送过，请填写刚才收到的验证码。");
+        setMessage(`请填写刚才收到的验证码；密码须与上次申请时一致。如需重发：${getApiErrorMessage(err)}`);
         return;
       }
-      setError(getApiErrorMessage(err));
+      setError(mode === "login" && err instanceof ApiError && err.detail === "email not verified"
+        ? "邮箱尚未验证。请选择“注册账号”，使用此邮箱申请验证码。"
+        : getApiErrorMessage(err));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   }
@@ -127,49 +150,51 @@ export function AuthPanel({ onLogin }: AuthPanelProps) {
 
           <section className="min-w-0 p-5 sm:p-9 lg:p-12">
             <div className="mx-auto w-full max-w-sm">
-              <div className="mb-8 flex items-center border-b border-border" aria-label="账号操作">
-                <button type="button" aria-pressed={mode === "login"} onClick={() => changeMode("login")} className={`-mb-px border-b-2 px-1 pb-3 pt-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode === "login" ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>登录</button>
-                <button type="button" aria-pressed={mode !== "login"} onClick={() => changeMode("register")} className={`-mb-px ml-7 border-b-2 px-1 pb-3 pt-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode !== "login" ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>注册账号</button>
+              <div role="group" className="mb-8 flex items-center border-b border-border" aria-label="账号操作">
+                <button type="button" disabled={loading} aria-pressed={mode === "login"} onClick={() => changeMode("login")} className={`-mb-px border-b-2 px-1 pb-3 pt-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode === "login" ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>登录</button>
+                <button type="button" disabled={loading} aria-pressed={mode !== "login"} onClick={() => mode === "login" && changeMode("register")} className={`-mb-px ml-7 border-b-2 px-1 pb-3 pt-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode !== "login" ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>注册账号</button>
                 <ShieldCheck className="mb-3 ml-auto text-muted-foreground" size={17} strokeWidth={1.5} />
               </div>
 
               <div className="mb-8">
                 <p className="eyebrow">{mode === "login" ? "Your personal workspace" : mode === "register" ? "Create your account" : "账号注册 / 邮箱验证"}</p>
-                <h2 className="page-heading mt-3 text-2xl sm:text-3xl">{title}</h2>
+                <h2 id="auth-title" className="page-heading mt-3 text-2xl sm:text-3xl">{title}</h2>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">{subtitle}</p>
               </div>
 
-              <form className="space-y-5" onSubmit={submit} aria-busy={loading}>
+              <p className="sr-only" role="status">{loading ? "正在提交，请稍候。" : message}</p>
+              <form ref={formRef} className="space-y-5" onSubmit={submit} onChange={() => { if (error) setError(null); }} aria-labelledby="auth-title" aria-busy={loading}>
                 <div className="space-y-2.5">
                   <Label htmlFor="email">邮箱地址</Label>
-                  <Input id="email" type="email" className="h-12 bg-background" value={email} autoComplete="email" onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
+                  <Input id="email" name="email" type="email" className="h-12 bg-background" value={email} autoComplete="username" minLength={3} maxLength={255} readOnly={loading || mode === "verify"} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
                 </div>
                 {mode !== "verify" ? (
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-3">
                       <Label htmlFor="password">密码</Label>
-                      {mode === "register" && <span id="password-hint" className="text-xs text-muted-foreground">至少 8 位字符</span>}
+                      {mode === "register" && <span id="password-hint" className="text-xs text-muted-foreground">8 至 128 个字符</span>}
                     </div>
                     <div className="relative">
-                      <Input id="password" className="h-12 bg-background pr-12" type={showPassword ? "text" : "password"} value={password} autoComplete={mode === "login" ? "current-password" : "new-password"} aria-describedby={mode === "register" ? "password-hint" : undefined} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
-                      <button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} aria-pressed={showPassword} className="absolute inset-y-1 right-1 flex w-10 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setShowPassword(value => !value)}>
+                      <Input id="password" name="password" className="h-12 bg-background pr-12" type={showPassword ? "text" : "password"} value={password} autoComplete={mode === "login" ? "current-password" : "new-password"} aria-describedby={mode === "register" ? "password-hint" : undefined} onChange={(event) => setPassword(event.target.value)} minLength={mode === "register" ? 8 : 1} maxLength={128} readOnly={loading} required />
+                      <button type="button" aria-label="显示密码" aria-pressed={showPassword} disabled={loading} className="absolute inset-y-1 right-1 flex w-10 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setShowPassword(value => !value)}>
                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    <Label htmlFor="code">邮箱验证码</Label>
-                    <Input id="code" className="h-12 bg-background font-mono text-lg tracking-[0.2em]" value={code} autoComplete="one-time-code" inputMode="numeric" minLength={4} maxLength={12} onChange={(event) => setCode(event.target.value)} required />
+                    <Label htmlFor="code">邮箱验证码（6 位数字）</Label>
+                    <Input id="code" name="code" type="text" className="h-12 bg-background font-mono text-lg tracking-[0.2em]" value={code} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} onChange={(event) => setCode(event.target.value)} readOnly={loading} required />
                   </div>
                 )}
                 {devCode && <div className="break-all border-l-2 border-primary bg-muted p-4 text-sm text-primary">开发验证码：<b className="font-mono">{devCode}</b></div>}
-                {message && <div role="status" className="flex gap-2 border-l-2 border-success bg-muted p-4 text-sm leading-6 text-success"><ShieldCheck className="mt-0.5 shrink-0" size={18} /><span>{message}</span></div>}
+                {message && <div className="flex gap-2 border-l-2 border-success bg-muted p-4 text-sm leading-6 text-success"><ShieldCheck className="mt-0.5 shrink-0" size={18} /><span>{message}</span></div>}
                 {error && <div role="alert" className="border-l-2 border-danger bg-muted p-4 text-sm leading-6 text-danger">{error}</div>}
-                <Button className="h-12 w-full justify-between px-5" disabled={loading}>
+                <Button type="submit" className="h-12 w-full justify-between px-5 aria-disabled:cursor-wait aria-disabled:opacity-50" aria-disabled={loading}>
                   <span>{loading ? "正在处理…" : mode === "login" ? "登录工作台" : mode === "register" ? "创建账号" : "完成验证"}</span>
                   {loading ? <Loader2 className="animate-spin" size={18} /> : <ArrowRight size={18} />}
                 </Button>
+                {mode === "verify" && <Button type="button" variant="ghost" className="w-full" disabled={loading} onClick={() => changeMode("register")}>返回修改注册信息或重新获取验证码</Button>}
               </form>
               <p className="mt-5 text-xs leading-6 text-muted-foreground">{mode === "login" ? "用电趋势、余额变化与提醒，在一个工作台里查看。" : "验证邮箱后，即可登录并设置自己的宿舍用电提醒。"}</p>
               {announcements.length > 0 && <div className="mt-7 border-t border-border pt-5"><AnnouncementsNotice announcements={announcements} /></div>}

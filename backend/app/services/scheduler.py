@@ -24,6 +24,8 @@ async def _periodic_runner(name: str, interval_seconds: int, runner: Callable[[]
 
 
 def start_background_tasks(app: FastAPI) -> None:
+    if any(not task.done() for task in getattr(app.state, "background_tasks", [])):
+        return
     if not settings.background_tasks_enabled:
         app.state.background_tasks = []
         return
@@ -52,3 +54,4 @@ async def stop_background_tasks(app: FastAPI) -> None:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    app.state.background_tasks = []

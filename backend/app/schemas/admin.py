@@ -1,9 +1,10 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.schemas import DatabaseId
 from app.schemas.binding import UserRoomOut
 from app.schemas.reading import ElectricityRechargeOut
 from app.schemas.room import RoomOut
@@ -40,16 +41,22 @@ class AdminTokenOut(BaseModel):
     admin: AdminUserOut
 
 
+AccountName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+ProviderToken = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=8192)]
+SmtpHost = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+SmtpFromEmail = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=255)]
+
+
 class AdminAuthTokenCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    token_value: str = Field(min_length=10, max_length=8192)
+    name: AccountName
+    token_value: ProviderToken
     min_interval_seconds: int = Field(default=10, ge=0, le=3600)
     enabled: bool = True
 
 
 class AdminAuthTokenUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=80)
-    token_value: str | None = Field(default=None, min_length=10, max_length=8192)
+    name: AccountName | None = None
+    token_value: ProviderToken | None = None
     min_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     enabled: bool | None = None
 
@@ -72,7 +79,7 @@ class AdminAuthTokenOut(BaseModel):
 
 
 class AdminTokenHealthTestRequest(BaseModel):
-    room_id: int | None = None
+    room_id: DatabaseId | None = None
 
 
 class AdminHealthTestOut(BaseModel):
@@ -95,12 +102,12 @@ class AdminAuthTokenHealthLogOut(BaseModel):
 
 
 class SmtpSettingsCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    host: str = Field(min_length=1, max_length=255)
+    name: AccountName
+    host: SmtpHost
     port: int = Field(default=465, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=255)
-    from_email: str = Field(min_length=3, max_length=255)
+    from_email: SmtpFromEmail
     enabled: bool = True
     min_interval_seconds: int = Field(default=0, ge=0, le=3600)
     use_ssl: bool = True
@@ -108,12 +115,12 @@ class SmtpSettingsCreate(BaseModel):
 
 
 class SmtpSettingsUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=80)
-    host: str | None = Field(default=None, min_length=1, max_length=255)
+    name: AccountName | None = None
+    host: SmtpHost | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=255)
-    from_email: str | None = Field(default=None, min_length=3, max_length=255)
+    from_email: SmtpFromEmail | None = None
     enabled: bool | None = None
     min_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     use_ssl: bool | None = None
@@ -380,7 +387,7 @@ class HwglProbeStartRequest(BaseModel):
     # Existing rooms are selected by id.  A custom probe target can instead
     # provide a room number; the API resolves it against the HWGL public
     # directory before creating an isolated probe-only room record.
-    room_id: int | None = Field(default=None, gt=0)
+    room_id: DatabaseId | None = None
     room_number: str | None = Field(default=None, min_length=1, max_length=40)
     building_side: Literal["auto", "11", "13"] = "auto"
     interval_seconds: int = Field(default=60, ge=60, le=60 * 60)

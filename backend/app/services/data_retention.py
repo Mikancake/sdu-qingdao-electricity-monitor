@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import Delete, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -46,18 +46,23 @@ class DataRetentionCleanupResult:
         )
 
 
-def _cutoff(days: int) -> datetime | None:
+def _cutoff(now: datetime, days: int) -> datetime | None:
     if days <= 0:
         return None
-    return datetime.now(timezone.utc) - timedelta(days=days)
+    return now - timedelta(days=days)
 
 
-def _rowcount(value: int | None) -> int:
-    return int(value or 0)
+def _deleted(db: Session, statement: Delete) -> int:
+    # The ORM's default in-memory evaluator can compare a naive SQLite
+    # timestamp with an aware cutoff. Evaluate expiration in SQL instead.
+    sync = "fetch" if db.identity_map else False
+    result = db.execute(statement.execution_options(synchronize_session=sync))
+    return int(result.rowcount or 0)
 
 
 def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) -> DataRetentionCleanupResult:
     runtime = runtime or get_runtime_config(db)
+    now = datetime.now(timezone.utc)
 
     verification_codes_deleted = 0
     check_attempts_deleted = 0
@@ -70,59 +75,57 @@ def cleanup_data_retention(db: Session, runtime: RuntimeConfig | None = None) ->
     hwgl_probe_samples_deleted = 0
     hwgl_probe_sessions_deleted = 0
 
-    verification_cutoff = _cutoff(runtime.verification_code_retention_days)
+    verification_cutoff = _cutoff(now, runtime.verification_code_retention_days)
     if verification_cutoff is not None:
-        result = db.execute(delete(EmailVerificationCode).where(EmailVerificationCode.created_at < verification_cutoff))
-        verification_codes_deleted = _rowcount(result.rowcount)
+        verification_codes_deleted = _deleted(db, delete(EmailVerificationCode).where(EmailVerificationCode.created_at < verification_cutoff))
 
-    check_attempt_cutoff = _cutoff(runtime.check_attempt_retention_days)
+    check_attempt_cutoff = _cutoff(now, runtime.check_attempt_retention_days)
     if check_attempt_cutoff is not None:
-        result = db.execute(delete(CheckAttempt).where(CheckAttempt.created_at < check_attempt_cutoff))
-        check_attempts_deleted = _rowcount(result.rowcount)
+        check_attempts_deleted = _deleted(db, delete(CheckAttempt).where(CheckAttempt.created_at < check_attempt_cutoff))
 
-    notification_cutoff = _cutoff(runtime.notification_retention_days)
+    notification_cutoff = _cutoff(now, runtime.notification_retention_days)
     if notification_cutoff is not None:
-        result = db.execute(delete(Notification).where(Notification.created_at < notification_cutoff))
-        notifications_deleted = _rowcount(result.rowcount)
-        result = db.execute(delete(EmailDeliveryLog).where(EmailDeliveryLog.created_at < notification_cutoff))
-        email_delivery_logs_deleted = _rowcount(result.rowcount)
+        old_notifications = select(Notification.id).where(Notification.created_at < notification_cutoff)
+        # SQLite databases may not enforce ON DELETE SET NULL.
+        db.execute(
+            update(EmailDeliveryLog).where(EmailDeliveryLog.notification_id.in_(old_notifications)).values(notification_id=None)
+        )
+        notifications_deleted = _deleted(db, delete(Notification).where(Notification.created_at < notification_cutoff))
+        email_delivery_logs_deleted = _deleted(db, delete(EmailDeliveryLog).where(EmailDeliveryLog.created_at < notification_cutoff))
 
-    reading_cutoff = _cutoff(runtime.electricity_reading_retention_days)
+    reading_cutoff = _cutoff(now, runtime.electricity_reading_retention_days)
     if reading_cutoff is not None:
         old_reading_ids = select(ElectricityReading.id).where(ElectricityReading.read_at < reading_cutoff)
         db.execute(update(CheckAttempt).where(CheckAttempt.reading_id.in_(old_reading_ids)).values(reading_id=None))
         db.execute(update(Notification).where(Notification.reading_id.in_(old_reading_ids)).values(reading_id=None))
-        result = db.execute(delete(ElectricityReading).where(ElectricityReading.read_at < reading_cutoff))
-        electricity_readings_deleted = _rowcount(result.rowcount)
+        electricity_readings_deleted = _deleted(db, delete(ElectricityReading).where(ElectricityReading.read_at < reading_cutoff))
 
-    audit_cutoff = _cutoff(runtime.admin_audit_log_retention_days)
+    audit_cutoff = _cutoff(now, runtime.admin_audit_log_retention_days)
     if audit_cutoff is not None:
-        result = db.execute(delete(AdminAuditLog).where(AdminAuditLog.created_at < audit_cutoff))
-        admin_audit_logs_deleted = _rowcount(result.rowcount)
+        admin_audit_logs_deleted = _deleted(db, delete(AdminAuditLog).where(AdminAuditLog.created_at < audit_cutoff))
 
-    scheduled_job_cutoff = _cutoff(runtime.scheduled_job_run_retention_days)
+    scheduled_job_cutoff = _cutoff(now, runtime.scheduled_job_run_retention_days)
     if scheduled_job_cutoff is not None:
-        result = db.execute(
+        scheduled_job_runs_deleted = _deleted(
+            db,
             delete(ScheduledJobRun).where(
                 ScheduledJobRun.created_at < scheduled_job_cutoff,
                 ScheduledJobRun.status.in_(("succeeded", "failed")),
-            )
+            ),
         )
-        scheduled_job_runs_deleted = _rowcount(result.rowcount)
 
     if reading_cutoff is not None:
-        result = db.execute(delete(ElectricityRecharge).where(ElectricityRecharge.created_at < reading_cutoff))
-        electricity_recharges_deleted = _rowcount(result.rowcount)
+        electricity_recharges_deleted = _deleted(db, delete(ElectricityRecharge).where(ElectricityRecharge.created_at < reading_cutoff))
     if scheduled_job_cutoff is not None:
-        result = db.execute(delete(HwglProbeSample).where(HwglProbeSample.created_at < scheduled_job_cutoff))
-        hwgl_probe_samples_deleted = _rowcount(result.rowcount)
-        result = db.execute(
-            delete(HwglProbeSession).where(
-                HwglProbeSession.created_at < scheduled_job_cutoff,
-                HwglProbeSession.status.in_(("finished", "stopped", "failed")),
-            )
+        # A session and its samples are one report. Keep running reports
+        # intact and expire completed reports as a unit, on either backend.
+        expired = (
+            HwglProbeSession.status.in_(("finished", "stopped", "failed")),
+            func.coalesce(HwglProbeSession.finished_at, HwglProbeSession.created_at) < scheduled_job_cutoff,
         )
-        hwgl_probe_sessions_deleted = _rowcount(result.rowcount)
+        expired_ids = select(HwglProbeSession.id).where(*expired)
+        hwgl_probe_samples_deleted = _deleted(db, delete(HwglProbeSample).where(HwglProbeSample.session_id.in_(expired_ids)))
+        hwgl_probe_sessions_deleted = _deleted(db, delete(HwglProbeSession).where(*expired))
 
     db.commit()
     return DataRetentionCleanupResult(

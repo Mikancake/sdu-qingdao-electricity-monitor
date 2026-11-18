@@ -6,14 +6,19 @@ import { ArrowLeft, ArrowRight, BatteryCharging, Eye, EyeOff, KeyRound, Loader2,
 import { FormEvent, useMemo, useState } from "react";
 import { describeError } from "./utils";
 
-export function AdminLogin({ onLogin }: { onLogin: (token: string) => void }) {
+export function AdminLogin({ message, onLogin }: { message: string | null; onLogin: (token: string) => void }) {
   const api = useMemo(() => createApiClient(), []);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const loginMutation = useMutation({ mutationFn: api.adminLogin, onSuccess: (result) => onLogin(result.access_token), onError: (e) => setError(describeError(e)) });
-  function submit(event: FormEvent) { event.preventDefault(); setError(null); loginMutation.mutate({ username, password }); }
+  const loginMutation = useMutation({ gcTime: 0, mutationFn: api.adminLogin, onSuccess: (result) => onLogin(result.access_token), onError: (e) => setError(describeError(e)) });
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (loginMutation.isPending) return;
+    setError(null);
+    loginMutation.mutate({ username, password });
+  }
 
   return (
     <main className="app-background flex min-h-screen flex-col px-4 py-5 text-foreground sm:px-8 sm:py-9">
@@ -57,11 +62,12 @@ export function AdminLogin({ onLogin }: { onLogin: (token: string) => void }) {
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">输入管理员账号，继续处理平台事务。</p>
               </div>
               <form aria-label="管理员登录表单" aria-busy={loginMutation.isPending} className="space-y-5" onSubmit={submit}>
-                <div className="space-y-2.5"><Label htmlFor="admin-username">用户名</Label><Input id="admin-username" className="h-12 bg-background" placeholder="输入管理员用户名" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required /></div>
+                <div className="space-y-2.5"><Label htmlFor="admin-username">用户名</Label><Input id="admin-username" minLength={2} maxLength={80} className="h-12 bg-background" placeholder="输入管理员用户名" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required /></div>
                 <div className="space-y-2.5">
                   <Label htmlFor="admin-password">密码</Label>
                   <div className="relative"><Input id="admin-password" className="h-12 bg-background pr-12" placeholder="输入登录密码" type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /><button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)} className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div>
                 </div>
+                {message && !error && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
                 {error ? <div role="alert" className="border-l-2 border-danger bg-muted p-4 text-sm leading-6 text-danger">{error}</div> : null}
                 <Button aria-busy={loginMutation.isPending} className="h-12 w-full justify-between px-5" disabled={loginMutation.isPending}><span>{loginMutation.isPending ? "正在验证身份…" : "进入工作台"}</span>{loginMutation.isPending ? <Loader2 className="animate-spin" size={17} /> : <ArrowRight size={17} />}</Button>
               </form>

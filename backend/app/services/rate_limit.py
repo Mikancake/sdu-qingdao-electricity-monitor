@@ -3,6 +3,7 @@ from collections import OrderedDict, deque
 from functools import lru_cache
 from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
 from threading import Lock
+from urllib.parse import quote, unquote
 
 from fastapi import HTTPException, Request
 
@@ -54,17 +55,26 @@ class InMemoryRateLimiter:
     ) -> int:
         normalized_bucket = bucket.strip().lower() if bucket else None
         normalized_ip = client_ip.strip().lower() if client_ip else None
+        if normalized_ip and (address := _parse_ip(normalized_ip)) is not None:
+            normalized_ip = str(address)
         normalized_identity = identity.strip().lower() if identity else None
         with self._lock:
-            keys = list(self._events.keys())
             matched_keys = []
-            for key in keys:
-                normalized_key = key.lower()
-                if normalized_bucket and not normalized_key.startswith(f"{normalized_bucket}:"):
+            for key in self._events:
+                # Bucket names may contain colons. The last two fields are
+                # escaped components, so IPv6 and composite identities are
+                # unambiguous without interpreting user input as a prefix.
+                fields = key.rsplit(":", 2)
+                if len(fields) != 3:
+                    if not (normalized_bucket or normalized_ip or normalized_identity):
+                        matched_keys.append(key)
                     continue
-                if normalized_ip and f":{normalized_ip}" not in normalized_key:
+                stored_bucket, scope, parts = fields
+                if normalized_bucket and normalized_bucket != stored_bucket.lower():
                     continue
-                if normalized_identity and normalized_identity not in normalized_key:
+                if normalized_ip and (scope == "account" or normalized_ip != unquote(scope)):
+                    continue
+                if normalized_identity and normalized_identity != unquote(parts.partition("/")[0]):
                     continue
                 matched_keys.append(key)
             for key in matched_keys:
@@ -126,18 +136,20 @@ def get_client_ip(request: Request) -> str:
     return str(peer)
 
 
+def _identity_parts(parts: tuple[object, ...]) -> str:
+    return "/".join(quote(str(part).strip().lower(), safe="@") for part in parts if part is not None)
+
+
 def account_rate_limit_key(bucket: str, *parts: object) -> str:
-    identity = ":".join(str(part).strip().lower() for part in parts if part is not None)
-    return f"{bucket}:account:{identity}"
+    return f"{bucket}:account:{_identity_parts(parts)}"
 
 
 def client_rate_limit_key(request: Request, bucket: str) -> str:
-    return f"{bucket}:{get_client_ip(request)}:all"
+    return rate_limit_key(request, bucket)
 
 
 def rate_limit_key(request: Request, bucket: str, *parts: object) -> str:
-    identity = ":".join(str(part).strip().lower() for part in parts if part is not None)
-    return f"{bucket}:{get_client_ip(request)}:{identity}"
+    return f"{bucket}:{quote(get_client_ip(request), safe='')}:{_identity_parts(parts)}"
 
 
 def enforce_rate_limit(key: str, *, limit: int, window_seconds: int) -> None:

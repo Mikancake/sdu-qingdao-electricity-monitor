@@ -52,6 +52,10 @@ def test_admin_user_and_room_pages_filter_sort_and_count() -> None:
             [
                 ElectricityReading(room_id=rooms[0].id, balance=Decimal("18.50"), read_at=now - timedelta(hours=4)),
                 ElectricityReading(room_id=rooms[0].id, balance=Decimal("16.25"), read_at=now),
+                ElectricityReading(room_id=rooms[1].id, balance=Decimal("8.00"), read_at=now),
+                # A later fetch can contain an older provider snapshot.
+                ElectricityReading(room_id=rooms[1].id, balance=Decimal("80.00"),
+                                   read_at=now + timedelta(hours=1), provider_updated_at=now - timedelta(days=1)),
             ]
         )
         db.commit()
@@ -91,7 +95,18 @@ def test_admin_user_and_room_pages_filter_sort_and_count() -> None:
         assert room_page.items[0].binding_count == 2
         assert room_page.items[0].latest_balance == Decimal("16.25")
         assert room_page.items[0].reading_count == 2
-        assert balance_page.items[0].room.room_number == "A101"
+        assert [item.latest_balance for item in balance_page.items] == [Decimal("16.25"), Decimal("8.00"), None]
         assert [reading.balance for reading in readings] == [Decimal("18.50"), Decimal("16.25")]
         assert filtered_rooms.total == 1
         assert filtered_rooms.items[0].room.room_number == "A103"
+
+        second_page = list_users_page(page=2, page_size=10, q=None, sort="email_asc", _=admin, db=db)
+        assert [item.email for item in second_page.items] == ["user10@example.com", "user11@example.com"]
+        for list_page, sort in ((list_users_page, "email_asc"), (list_admin_rooms_page, "building_asc")):
+            out_of_range = list_page(page=2**63, page_size=10, q=None, sort=sort, _=admin, db=db)
+            assert out_of_range.items == []
+            assert out_of_range.total > 0
+            for keyword in ("²", "1234567890123456789012345"):
+                empty = list_page(page=1, page_size=10, q=keyword, sort=sort, _=admin, db=db)
+                assert empty.total == 0
+                assert empty.items == []

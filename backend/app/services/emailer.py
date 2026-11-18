@@ -1,6 +1,7 @@
 import smtplib
 import ssl
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email import policy
@@ -92,7 +93,7 @@ def load_smtp_configs(*, include_disabled: bool = False, smtp_id: int | None = N
                 stmt = stmt.where(SmtpSettings.id == smtp_id)
             rows = list(db.scalars(stmt))
             configs = [_smtp_config_from_row(row) for row in rows if include_disabled or row.enabled]
-            if configs:
+            if rows:
                 return configs
     except SQLAlchemyError:
         pass
@@ -114,23 +115,22 @@ def smtp_configured() -> bool:
     return any(config.configured and config.enabled for config in load_smtp_configs())
 
 
-def _now_like(value: datetime | None = None) -> datetime:
-    tzinfo = value.tzinfo if value is not None else None
-    return datetime.now(tzinfo) if tzinfo is not None else datetime.now()
-
-
 def _is_available(config: SmtpConfig, now: datetime) -> bool:
     if not config.enabled or not config.configured:
         return False
     if config.id is None or config.min_interval_seconds <= 0 or config.last_used_at is None:
         return True
-    return config.last_used_at + timedelta(seconds=config.min_interval_seconds) <= _now_like(config.last_used_at)
+    last_used = config.last_used_at
+    comparable_now = now.astimezone(last_used.tzinfo) if last_used.tzinfo else now.astimezone().replace(tzinfo=None)
+    return last_used + timedelta(seconds=config.min_interval_seconds) <= comparable_now
 
 
 def _ordered_available_configs(configs: list[SmtpConfig]) -> list[SmtpConfig]:
     now = datetime.now()
     available = [config for config in configs if _is_available(config, now)]
-    return sorted(available, key=lambda item: (item.last_used_at is not None, item.last_used_at or datetime.min, item.id or 0))
+    return sorted(available, key=lambda item: (
+        item.last_used_at is not None, item.last_used_at.timestamp() if item.last_used_at else 0, item.id or 0
+    ))
 
 
 def _classify_smtp_error(exc: BaseException) -> str:
@@ -140,7 +140,9 @@ def _classify_smtp_error(exc: BaseException) -> str:
         return "auth"
     if isinstance(exc, smtplib.SMTPRecipientsRefused):
         return "recipient"
-    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, TimeoutError, OSError)):
+    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected)) or (
+        isinstance(exc, OSError) and not isinstance(exc, smtplib.SMTPException)
+    ):
         return "network"
     return "smtp"
 
@@ -260,15 +262,20 @@ def _send_with_config(
         message = _build_message(to_email, subject, body, config, html_body=html_body)
         tls_context = ssl.create_default_context()
         if config.use_ssl:
-            with smtplib.SMTP_SSL(config.host, config.port, timeout=20, context=tls_context) as smtp:
-                _login(smtp, config)
-                _send_message_data(smtp, message, config, to_email)
+            smtp = smtplib.SMTP_SSL(config.host, config.port, timeout=20, context=tls_context)
         else:
-            with smtplib.SMTP(config.host, config.port, timeout=20) as smtp:
-                if config.use_starttls:
-                    smtp.starttls(context=tls_context)
-                _login(smtp, config)
-                _send_message_data(smtp, message, config, to_email)
+            smtp = smtplib.SMTP(config.host, config.port, timeout=20)
+        try:
+            if config.use_starttls and not config.use_ssl:
+                smtp.starttls(context=tls_context)
+            _login(smtp, config)
+            _send_message_data(smtp, message, config, to_email)
+            # DATA was accepted. A failure saying goodbye must not resend it.
+            with suppress(OSError):
+                smtp.quit()
+        finally:
+            with suppress(OSError):
+                smtp.close()
     except DeliveryStatusUnknownError as exc:
         error = f"{type(exc).__name__}: {exc}"
         _record_smtp_health(
@@ -303,22 +310,18 @@ def send_email(
     notification_id: int | None = None,
 ) -> EmailSendResult:
     attempts = max(1, retries)
-    last_result = EmailSendResult(False, "email was not attempted")
+    last_result = EmailSendResult(False, "SMTP is not configured or all SMTP accounts are cooling down")
 
     for index in range(attempts):
         configs = _ordered_available_configs(load_smtp_configs(smtp_id=smtp_id))
         if not configs:
-            last_result = EmailSendResult(False, "SMTP is not configured or all SMTP accounts are cooling down")
-            _record_email_delivery(last_result, source=source, recipient_email=to_email, subject=subject, notification_id=notification_id)
-            return last_result
+            break
 
         for config in configs:
             last_result = _send_with_config(config, to_email, subject, body, html_body=html_body, source=source)
             if last_result.ok:
                 _record_email_delivery(last_result, source=source, recipient_email=to_email, subject=subject, notification_id=notification_id)
                 return last_result
-            if last_result.error == "SMTP is not configured":
-                continue
 
         if index < attempts - 1 and retry_delay_seconds > 0:
             time.sleep(retry_delay_seconds)
@@ -346,6 +349,10 @@ def _send_message_data(smtp: smtplib.SMTP, message: EmailMessage, config: SmtpCo
 
     try:
         data_code, data_response = smtp.data(message.as_bytes(policy=policy.SMTP))
+    except smtplib.SMTPResponseException:
+        # smtplib.data raises SMTPDataError on an explicit refusal of DATA;
+        # SMTPException is an OSError too. This is a known non-delivery.
+        raise
     except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
         raise DeliveryStatusUnknownError(
             "SMTP connection broke after message DATA was submitted; retry was suppressed to avoid duplicate email"

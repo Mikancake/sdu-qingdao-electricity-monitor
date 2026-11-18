@@ -36,10 +36,10 @@ def test_smtp_ssl_receives_verified_tls_context(monkeypatch) -> None:
         def __init__(self, host: str, port: int, *, timeout: int, context: object) -> None:
             captured.update(host=host, port=port, timeout=timeout, context=context)
 
-        def __enter__(self):
-            return self
+        def quit(self) -> None:
+            return None
 
-        def __exit__(self, *_args) -> None:
+        def close(self) -> None:
             return None
 
     monkeypatch.setattr(emailer.ssl, "create_default_context", lambda: verified_context)

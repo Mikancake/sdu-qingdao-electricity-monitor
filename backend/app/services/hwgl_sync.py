@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, stored_datetime_key
 from app.electricity.hwgl_client import SHANGHAI_TZ, HwglElectricityClient, HwglRechargeRecord
 from app.electricity.provider import HWGL_PROVIDER
 from app.models.electricity_reading import ElectricityReading
@@ -19,7 +19,8 @@ from app.models.electricity_recharge import ElectricityRecharge
 from app.models.room import Room
 from app.models.user import User
 from app.models.user_room import UserRoom
-from app.services.electricity_queries import apply_query_resolution, reading_from_query
+from app.services.electricity_queries import apply_query_resolution, reading_from_query, stored_reading_balance
+from app.services.runtime_settings import get_runtime_config
 
 
 logger = logging.getLogger(__name__)
@@ -47,18 +48,6 @@ class HwglSyncSummary:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _same_datetime(left: datetime | None, right: datetime | None) -> bool:
-    return _as_utc(left) == _as_utc(right)
 
 
 def _price_is_fresh(room: Room, now: datetime) -> bool:
@@ -103,12 +92,12 @@ def _upsert_daily_readings(
             db.add(reading_from_query(room.id, result, source="hwgl_daily_sync"))
             changed += 1
             continue
-        incoming_at = result.provider_updated_at
-        current_at = current.provider_updated_at
-        if incoming_at is not None and current_at is not None and _as_utc(incoming_at) <= _as_utc(current_at):
+        incoming_at = stored_datetime_key(db, result.provider_updated_at)
+        current_at = stored_datetime_key(db, current.provider_updated_at)
+        if current_at is not None and (incoming_at is None or incoming_at <= current_at):
             continue
         incoming_values = {
-            "balance": result.balance,
+            "balance": stored_reading_balance(result.balance),
             "provider_updated_at": result.provider_updated_at,
             "reported_daily_usage": result.reported_daily_usage,
             "power_status": result.power_status,
@@ -143,19 +132,19 @@ def _upsert_recharges(db: Session, room: Room, records: list[HwglRechargeRecord]
     for record in records:
         current = existing_by_hash.get(record.external_id_hash)
         if current is None:
-            db.add(
-                ElectricityRecharge(
-                    room_id=room.id,
-                    provider=HWGL_PROVIDER,
-                    external_id_hash=record.external_id_hash,
-                    external_id_tail=record.external_id_tail,
-                    paid_at=record.paid_at,
-                    amount=record.amount,
-                    line_type=record.line_type,
-                    payment_status=record.payment_status,
-                    processing_status=record.processing_status,
-                )
+            current = ElectricityRecharge(
+                room_id=room.id,
+                provider=HWGL_PROVIDER,
+                external_id_hash=record.external_id_hash,
+                external_id_tail=record.external_id_tail,
+                paid_at=record.paid_at,
+                amount=record.amount,
+                line_type=record.line_type,
+                payment_status=record.payment_status,
+                processing_status=record.processing_status,
             )
+            db.add(current)
+            existing_by_hash[record.external_id_hash] = current
             changed += 1
             continue
         incoming_values = {
@@ -168,7 +157,7 @@ def _upsert_recharges(db: Session, room: Room, records: list[HwglRechargeRecord]
         }
         values_changed = any(
             (
-                not _same_datetime(getattr(current, key), value)
+                stored_datetime_key(db, current.paid_at) != stored_datetime_key(db, value)
                 if key == "paid_at"
                 else getattr(current, key) != value
             )
@@ -210,7 +199,7 @@ def sync_hwgl_room(
             logger.warning("HWGL price sync failed for room_id=%s: %s", room.id, exc)
             outcome.errors.append("price")
 
-    today = datetime.now(SHANGHAI_TZ).date()
+    today = now.astimezone(SHANGHAI_TZ).date()
     days = max(1, history_days or settings.hwgl_metadata_history_days)
     try:
         daily_results = hwgl.query_daily_records(room, today - timedelta(days=days - 1), today)
@@ -261,6 +250,7 @@ def run_hwgl_metadata_sync(
     delay_seconds: float = 0.2,
 ) -> HwglSyncSummary:
     with SessionLocal() as db:
+        runtime = get_runtime_config(db)
         rooms = _bound_hwgl_rooms(db)
         if limit is not None:
             rooms = rooms[:limit]
@@ -268,7 +258,11 @@ def run_hwgl_metadata_sync(
         client = HwglElectricityClient()
         for index, room in enumerate(rooms):
             try:
-                outcome = sync_hwgl_room(db, room, client=client)
+                outcome = sync_hwgl_room(
+                    db, room, client=client,
+                    history_days=runtime.hwgl_metadata_history_days,
+                    recharge_days=runtime.hwgl_recharge_history_days,
+                )
                 summary.rooms_succeeded += 1
                 summary.daily_readings_upserted += outcome.daily_readings_upserted
                 summary.recharges_upserted += outcome.recharges_upserted

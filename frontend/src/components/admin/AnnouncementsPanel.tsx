@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, ReactNode, useState } from "react";
 import { Megaphone, Pencil, Plus, Trash2 } from "lucide-react";
 
 import type { Announcement, AnnouncementVisibility } from "../../lib/types";
@@ -10,6 +10,7 @@ import { Input, Label } from "../ui/input";
 
 interface AnnouncementsPanelProps {
   announcements: Announcement[];
+  listProblem: ReactNode;
   loading: boolean;
   saving: boolean;
   onCreate: (payload: {
@@ -17,10 +18,10 @@ interface AnnouncementsPanelProps {
     content: string;
     is_published: boolean;
     visibility: AnnouncementVisibility;
-  }) => void;
+  }, onSuccess: () => void) => void;
   onUpdate: (
     id: number,
-    payload: { title?: string; content?: string; is_published?: boolean; visibility?: AnnouncementVisibility }
+    payload: { title?: string; content?: string; is_published?: boolean; visibility?: AnnouncementVisibility }, onSuccess: () => void
   ) => void;
   onDelete: (id: number) => void;
 }
@@ -47,7 +48,7 @@ function VisibilityField({
   );
 }
 
-export function AnnouncementsPanel({ announcements, loading, saving, onCreate, onUpdate, onDelete }: AnnouncementsPanelProps) {
+export function AnnouncementsPanel({ announcements, listProblem, loading, saving, onCreate, onUpdate, onDelete }: AnnouncementsPanelProps) {
   const [draft, setDraft] = useState(emptyDraft);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState(emptyDraft);
@@ -60,36 +61,34 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
   function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft.title.trim() || !draft.content.trim()) return;
-    onCreate({ ...draft, title: draft.title.trim(), content: draft.content.trim() });
-    setDraft(emptyDraft);
+    onCreate({ ...draft, title: draft.title.trim(), content: draft.content.trim() }, () => setDraft(emptyDraft));
   }
 
   function submitEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (editingId === null || !editDraft.title.trim() || !editDraft.content.trim()) return;
-    onUpdate(editingId, { ...editDraft, title: editDraft.title.trim(), content: editDraft.content.trim() });
-    setEditingId(null);
+    onUpdate(editingId, { ...editDraft, title: editDraft.title.trim(), content: editDraft.content.trim() }, () => setEditingId(null));
   }
   const publishedCount = announcements.filter((item) => item.is_published).length;
   const draftCount = announcements.length - publishedCount;
 
   return (
-    <div className="space-y-5">
+    <fieldset aria-label="公告管理" disabled={saving} aria-busy={saving} className="min-w-0 space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
             <Megaphone size={14} />
             内容运营
           </div>
-          <h1 className="text-xl font-semibold">公告管理</h1>
+          <h2 className="text-xl font-semibold">公告管理</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             公告显示在页面底部，用户可以自行关闭；「所有人可见」的公告还会出现在未登录的登录/注册页。草稿不会对任何人可见。
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        {!loading && !listProblem && <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Badge tone="success">{publishedCount} 条已发布</Badge>
           <Badge tone="muted">{draftCount} 条草稿</Badge>
-        </div>
+        </div>}
       </div>
 
       <Card className="border-border bg-panel shadow-none">
@@ -147,7 +146,7 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
               </label>
               <Button type="submit" disabled={saving || !draft.title.trim() || !draft.content.trim()}>
                 <Megaphone size={16} />
-                发布公告
+                {draft.is_published ? "发布公告" : "保存草稿"}
               </Button>
             </div>
           </form>
@@ -158,12 +157,13 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
         <CardHeader>
           <CardTitle className="flex items-center justify-between gap-3">
             <span>公告列表</span>
-            <span className="text-xs font-normal text-muted-foreground">{announcements.length} 条</span>
+            {!loading && !listProblem && <span className="text-xs font-normal text-muted-foreground">{announcements.length} 条</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          {listProblem}
           {loading ? <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">正在读取公告……</div> : null}
-          {!loading && announcements.length === 0 ? (
+          {!listProblem && !loading && announcements.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
               <Megaphone className="mx-auto mb-2 text-muted-foreground/70" size={24} />
               还没有公告，发布第一条通知吧。
@@ -203,7 +203,7 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
                       已发布
                     </label>
                     <div className="flex gap-2">
-                      <Button type="submit" size="sm" disabled={saving}>
+                      <Button type="submit" size="sm" disabled={saving || !editDraft.title.trim() || !editDraft.content.trim()}>
                         保存
                       </Button>
                       <Button type="button" size="sm" variant="secondary" onClick={() => setEditingId(null)}>
@@ -214,7 +214,7 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
                 </form>
               ) : (
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
+                  <div className="min-w-0 break-words">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium">{item.title}</h3>
                       <Badge tone={item.is_published ? "success" : "muted"}>{item.is_published ? "已发布" : "草稿"}</Badge>
@@ -241,6 +241,6 @@ export function AnnouncementsPanel({ announcements, loading, saving, onCreate, o
           ))}
         </CardContent>
       </Card>
-    </div>
+    </fieldset>
   );
 }

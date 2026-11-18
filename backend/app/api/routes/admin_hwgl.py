@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
+from app.schemas import DatabaseId
 from app.api.routes.admin_common import audit
 from app.core.config import settings
 from app.electricity.buildings import (
@@ -103,7 +104,7 @@ def list_hwgl_probes(
 
 @router.get("/hwgl-probes/{probe_id}", response_model=HwglProbeDetailOut)
 def get_hwgl_probe(
-    probe_id: int,
+    probe_id: DatabaseId,
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> HwglProbeDetailOut:
@@ -258,7 +259,7 @@ def create_hwgl_probe(
 
 @router.post("/hwgl-probes/{probe_id}/stop", response_model=HwglProbeSessionOut)
 def stop_probe(
-    probe_id: int,
+    probe_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> HwglProbeSessionOut:

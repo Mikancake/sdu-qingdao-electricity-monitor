@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AdminAuditLog } from "../../lib/types";
 import { formatDateTime } from "../../lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -7,11 +8,13 @@ import { ListSkeleton } from "../ui/skeleton";
 
 export function AuditPanel({
   logs,
+  listProblem,
   loading,
   filters,
   onFiltersChange
 }: {
   logs: AdminAuditLog[];
+  listProblem: ReactNode;
   loading: boolean;
   filters: LogFilters;
   onFiltersChange: (filters: LogFilters) => void;
@@ -24,7 +27,7 @@ export function AuditPanel({
       </CardHeader>
       <CardContent>
         <LogToolbar filters={filters} onChange={onFiltersChange} />
-        {loading ? (
+        {listProblem || (loading ? (
           <ListSkeleton rows={5} />
         ) : (
           <div className="responsive-table-shell rounded-lg border border-border">
@@ -52,14 +55,14 @@ export function AuditPanel({
                     <td data-label="目标" className="px-4 py-3 text-muted-foreground">
                       {log.target_type} {log.target_id ?? ""}
                     </td>
-                    <td data-label="详情" className="max-w-[420px] truncate px-4 py-3 text-muted-foreground">{log.detail ?? "--"}</td>
+                    <td data-label="详情" className="max-w-[420px] break-words px-4 py-3 text-muted-foreground">{log.detail ?? "--"}</td>
                   </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        )}
+        ))}
       </CardContent>
     </Card>
   );

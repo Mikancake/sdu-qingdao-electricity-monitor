@@ -5,17 +5,19 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.db.session import stored_datetime_key
 from app.electricity.client import ElectricityQueryResult
 from app.electricity.hwgl_client import SHANGHAI_TZ, HwglElectricityClient
 from app.electricity.provider import HWGL_PROVIDER
 from app.models.check_attempt import CheckAttempt
 from app.models.electricity_reading import ElectricityReading
+from app.models.notification import Notification
 from app.models.room import Room
 from app.services.electricity_queries import apply_query_resolution, reading_from_query
 
@@ -57,18 +59,13 @@ def _validate_options(options: HwglBackfillOptions) -> None:
         raise ValueError("delay_seconds cannot be negative")
 
 
-def _normalized_datetime(value: datetime | None) -> datetime | None:
-    if value is None or value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def _fingerprint(
+    db: Session,
     provider_updated_at: datetime | None,
     reported_usage_date: date | None,
     balance: Decimal,
 ) -> tuple[datetime | None, date | None, Decimal]:
-    return _normalized_datetime(provider_updated_at), reported_usage_date, Decimal(str(balance))
+    return stored_datetime_key(db, provider_updated_at), reported_usage_date, balance
 
 
 def _load_hwgl_rooms(db: Session, limit: int | None) -> list[Room]:
@@ -117,7 +114,7 @@ def _existing_fingerprints(
         )
     )
     return {
-        _fingerprint(row.provider_updated_at, row.reported_usage_date, row.balance)
+        _fingerprint(db, row.provider_updated_at, row.reported_usage_date, row.balance)
         for row in rows
     }
 
@@ -132,14 +129,16 @@ def _insert_history(
     for result in reversed(results):
         if result.balance is None:
             continue
+        reading = reading_from_query(room.id, result, source="hwgl_backfill")
         fingerprint = _fingerprint(
+            db,
             result.provider_updated_at,
             result.reported_usage_date,
-            result.balance,
+            reading.balance,
         )
         if fingerprint in existing:
             continue
-        db.add(reading_from_query(room.id, result, source="hwgl_backfill"))
+        db.add(reading)
         existing.add(fingerprint)
         inserted += 1
     return inserted
@@ -155,6 +154,7 @@ def _purge_legacy_readings(db: Session, room_id: int) -> int:
         .where(CheckAttempt.reading_id.in_(legacy_ids))
         .values(reading_id=None)
     )
+    db.execute(update(Notification).where(Notification.reading_id.in_(legacy_ids)).values(reading_id=None))
     result = db.execute(
         delete(ElectricityReading).where(
             ElectricityReading.room_id == room_id,
@@ -200,7 +200,7 @@ def backfill_hwgl_rooms(
     for room in rooms:
         try:
             results, error_kind = _query_history(hwgl, room, current_date, effective_options)
-            if not results:
+            if not results or error_kind != "no_reading":
                 db.rollback()
                 _record_failure(summary, room.id, error_kind)
                 continue

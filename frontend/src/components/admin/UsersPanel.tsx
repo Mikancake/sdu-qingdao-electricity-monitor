@@ -8,7 +8,7 @@ import { PaginationControls } from "../ui/pagination";
 import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar } from "./toolbars";
 import { Loader2, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 
 export function AdminUserRoomEditor({
   binding,
@@ -48,7 +48,15 @@ export function AdminUserRoomEditor({
   }, [binding]);
 
   return (
-    <div className="rounded-lg border border-border p-3">
+    <form className="rounded-lg border border-border p-3" onSubmit={(event) => {
+      event.preventDefault();
+      onSave(binding.id, {
+        enabled, alert_days: thresholdMode === "days" ? Number(alertDays) : binding.alert_days,
+        alert_threshold_mode: thresholdMode, low_power_threshold: thresholdMode === "fixed" ? threshold.trim() : null,
+        manual_check_cooldown_seconds: cooldown.trim() ? Number(cooldown) : null,
+        notify_cooldown_hours: notifyCooldown.trim() ? Number(notifyCooldown) : null
+      });
+    }}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">
@@ -83,6 +91,7 @@ export function AdminUserRoomEditor({
               type="number"
               min={1}
               max={30}
+              required
               value={alertDays}
               onChange={(event) => setAlertDays(event.target.value)}
             />
@@ -95,7 +104,7 @@ export function AdminUserRoomEditor({
               id={`admin-threshold-${binding.id}`}
               type="number"
               min={0}
-              step="0.1"
+              max={100000} step="0.01" required
               value={threshold}
               onChange={(event) => setThreshold(event.target.value)}
               placeholder="例如 10"
@@ -113,6 +122,7 @@ export function AdminUserRoomEditor({
             id={`admin-notify-cooldown-${binding.id}`}
             type="number"
             min={0}
+            max={720}
             value={notifyCooldown}
             onChange={(event) => setNotifyCooldown(event.target.value)}
             placeholder="继承用户/全局"
@@ -124,6 +134,7 @@ export function AdminUserRoomEditor({
             id={`admin-cooldown-${binding.id}`}
             type="number"
             min={0}
+            max={3600}
             value={cooldown}
             onChange={(event) => setCooldown(event.target.value)}
             placeholder="继承用户/全局"
@@ -131,29 +142,16 @@ export function AdminUserRoomEditor({
         </div>
       </div>
       <div className="mt-3 flex justify-end gap-2">
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() =>
-            onSave(binding.id, {
-              enabled,
-              alert_days: Math.max(1, Number(alertDays) || binding.alert_days),
-              alert_threshold_mode: thresholdMode,
-              low_power_threshold: thresholdMode === "fixed" && threshold.trim() ? threshold.trim() : null,
-              manual_check_cooldown_seconds: cooldown.trim() ? Math.max(0, Number(cooldown)) : null,
-              notify_cooldown_hours: notifyCooldown.trim() ? Math.max(0, Number(notifyCooldown)) : null
-            })
-          }
-        >
+        <Button type="submit" size="sm" variant="secondary">
           <Save size={14} />
           保存
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => onDelete(binding.id)}>
+        <Button type="button" size="sm" variant="ghost" onClick={() => onDelete(binding.id)}>
           <Trash2 size={14} />
           删除
         </Button>
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -162,6 +160,7 @@ export function UsersPanel({
   query,
   onQueryChange,
   detail,
+  listProblem, detailProblem, busy,
   loading,
   detailLoading,
   selectedUserId,
@@ -175,6 +174,7 @@ export function UsersPanel({
   query: AdminPageQuery;
   onQueryChange: (query: AdminPageQuery) => void;
   detail?: AdminManagedUserDetail;
+  listProblem: ReactNode; detailProblem: ReactNode; busy: boolean;
   loading: boolean;
   detailLoading: boolean;
   selectedUserId?: number | null;
@@ -208,6 +208,11 @@ export function UsersPanel({
   const [userCooldown, setUserCooldown] = useState("");
   const [userNotifyCooldown, setUserNotifyCooldown] = useState("");
   const [userSearch, setUserSearch] = useState(query.q);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  function selectUser(userId: number) {
+    onSelectUser(userId);
+    if (window.matchMedia("(max-width: 1535px)").matches) detailHeading.current?.focus();
+  }
 
   useEffect(() => {
     if (!detail) {
@@ -252,7 +257,7 @@ export function UsersPanel({
               { value: "rooms_asc", label: "宿舍数从少到多" }
             ]}
           />
-          {loading ? (
+          {listProblem || (loading ? (
             <ListSkeleton rows={5} />
           ) : (
             <>
@@ -270,20 +275,17 @@ export function UsersPanel({
                   {visibleUsers.length === 0 ? (
                     <tr>
                       <td className="responsive-table-empty px-4 py-8 text-center text-muted-foreground" colSpan={4}>
-                        没有匹配的用户
+                        {query.q ? "没有匹配的用户" : "暂无注册用户"}
                       </td>
                     </tr>
                   ) : (
                     visibleUsers.map((user) => (
                     <tr
                       key={user.id}
-                      className={`cursor-pointer border-t border-border transition hover:bg-muted/60 ${
-                        selectedUserId === user.id ? "bg-muted" : ""
-                      }`}
-                      onClick={() => onSelectUser(user.id)}
+                      className={`border-t border-border transition hover:bg-muted/60 ${selectedUserId === user.id ? "bg-muted" : ""}`}
                     >
                       <td data-label="用户" className="px-4 py-3">
-                        <div className="font-medium">{user.email}</div>
+                        <button type="button" className="break-all text-left font-medium text-primary hover:underline" aria-pressed={selectedUserId === user.id} aria-label={`查看 ${user.email} 的详情`} onClick={() => selectUser(user.id)}>{user.email}</button>
                         <Badge className="mt-1" tone={user.is_verified ? "success" : "warning"}>
                           {user.is_verified ? "已验证" : "未验证"}
                         </Badge>
@@ -311,24 +313,24 @@ export function UsersPanel({
               onPageSizeChange={(pageSize) => onQueryChange({ ...query, page: 1, page_size: pageSize })}
             />
             </>
-          )}
+          ))}
         </CardContent>
       </Card>
 
       <Card className="border-border bg-panel shadow-none">
         <CardHeader>
-          <CardTitle>用户详情</CardTitle>
+          <h2 ref={detailHeading} tabIndex={-1} className="scroll-mt-24 text-base font-semibold">用户详情</h2>
         </CardHeader>
         <CardContent>
           {!selectedUserId ? (
-            <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">选择左侧用户查看详情</div>
-          ) : detailLoading ? (
+            <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">从用户列表选择账号查看详情</div>
+          ) : detailProblem ? detailProblem : detailLoading ? (
             <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 animate-spin" size={18} />
               正在读取详情
             </div>
           ) : detail ? (
-            <div className="space-y-4">
+            <fieldset disabled={busy} aria-busy={busy} aria-label="用户配置" className="min-w-0 space-y-4">
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">账号邮箱</div>
                 <div className="mt-1 break-all text-sm font-medium">{detail.email}</div>
@@ -345,7 +347,15 @@ export function UsersPanel({
                   </Button>
                 </div>
               </div>
-              <div className="rounded-lg border border-border p-3">
+              <form className="rounded-lg border border-border p-3" onSubmit={(event) => {
+                event.preventDefault();
+                onUpdateUser(detail.id, {
+                  notification_email: notificationEmail.trim() || null,
+                  notification_email_verified: Boolean(notificationEmail.trim() && notificationVerified),
+                  manual_check_cooldown_seconds: userCooldown.trim() ? Number(userCooldown) : null,
+                  notify_cooldown_hours: userNotifyCooldown.trim() ? Number(userNotifyCooldown) : null
+                });
+              }}>
                 <div className="grid gap-3">
                   <div>
                     <Label htmlFor="admin-user-notification-email">提醒邮箱</Label>
@@ -353,7 +363,7 @@ export function UsersPanel({
                       id="admin-user-notification-email"
                       type="email"
                       value={notificationEmail}
-                      onChange={(event) => setNotificationEmail(event.target.value)}
+                      onChange={(event) => { setNotificationEmail(event.target.value); setNotificationVerified(false); }}
                       placeholder="留空则使用账号邮箱"
                     />
                   </div>
@@ -363,6 +373,7 @@ export function UsersPanel({
                       id="admin-user-notify-cooldown"
                       type="number"
                       min={0}
+                      max={720}
                       value={userNotifyCooldown}
                       onChange={(event) => setUserNotifyCooldown(event.target.value)}
                       placeholder="留空则继承全局"
@@ -374,6 +385,7 @@ export function UsersPanel({
                       id="admin-user-cooldown"
                       type="number"
                       min={0}
+                      max={3600}
                       value={userCooldown}
                       onChange={(event) => setUserCooldown(event.target.value)}
                       placeholder="留空则继承全局"
@@ -383,27 +395,18 @@ export function UsersPanel({
                     <input
                       className="h-4 w-4 accent-primary"
                       type="checkbox"
+                      disabled={!notificationEmail.trim()}
                       checked={notificationVerified}
                       onChange={(event) => setNotificationVerified(event.target.checked)}
                     />
                     提醒邮箱已验证
                   </label>
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      onUpdateUser(detail.id, {
-                        notification_email: notificationEmail.trim() ? notificationEmail.trim() : null,
-                        notification_email_verified: notificationVerified,
-                        manual_check_cooldown_seconds: userCooldown.trim() ? Math.max(0, Number(userCooldown)) : null,
-                        notify_cooldown_hours: userNotifyCooldown.trim() ? Math.max(0, Number(userNotifyCooldown)) : null
-                      })
-                    }
-                  >
+                  <Button type="submit" size="sm">
                     <Save size={14} />
                     保存用户配置
                   </Button>
                 </div>
-              </div>
+              </form>
               <div>
                 <div className="mb-2 text-xs font-medium text-muted-foreground">绑定宿舍</div>
                 <div className="space-y-2">
@@ -421,7 +424,7 @@ export function UsersPanel({
                   )}
                 </div>
               </div>
-            </div>
+            </fieldset>
           ) : (
             <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">用户不存在或读取失败</div>
           )}

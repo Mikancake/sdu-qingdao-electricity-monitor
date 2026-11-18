@@ -2,10 +2,10 @@ import re
 
 from sqlalchemy import Text, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from app import models  # noqa: F401
 from app.db.base import Base
-from app.db.session import SessionLocal
 from app.services.admins import ensure_initial_admin
 
 
@@ -392,5 +392,5 @@ def create_schema(engine: Engine, *, ensure_admin: bool = True) -> None:
     _backfill_existing_data(engine)
     if not ensure_admin:
         return
-    with SessionLocal() as db:
+    with Session(engine) as db:
         ensure_initial_admin(db)

@@ -4,10 +4,11 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import inspect
+from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.db.schema import create_schema
-from app.db.session import SessionLocal, engine
+from app.db.session import engine
 from app.services.admins import ensure_initial_admin
 
 
@@ -20,14 +21,17 @@ def alembic_config() -> Config:
 
 def main() -> int:
     config = alembic_config()
-    if not inspect(engine).has_table("alembic_version"):
-        # One-time compatibility bridge for databases created before Alembic.
-        create_schema(engine)
-        command.stamp(config, "head")
-    else:
-        command.upgrade(config, "head")
-        with SessionLocal() as db:
-            ensure_initial_admin(db)
+    tables_before = set(inspect(engine).get_table_names())
+    if "alembic_version" not in tables_before and tables_before.intersection(Base.metadata.tables):
+        # The compatibility bridge covers the pre-Alembic schema through
+        # probe-only rooms. create_all won't alter existing announcements;
+        # let the subsequent idempotent migrations reconcile that table.
+        create_schema(engine, ensure_admin=False)
+        command.stamp(config, "20260829_0005")
+    # Empty databases start at the baseline; versioned ones resume in place.
+    command.upgrade(config, "head")
+    with Session(engine) as db:
+        ensure_initial_admin(db)
 
     with engine.connect() as connection:
         revision = MigrationContext.configure(connection).get_current_revision()

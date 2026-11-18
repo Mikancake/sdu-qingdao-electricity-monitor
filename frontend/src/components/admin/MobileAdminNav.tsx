@@ -58,8 +58,13 @@ export function MobileAdminNav({
         first.focus();
       }
     };
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => { if (desktop.matches) setOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    closeOnDesktop();
     document.addEventListener("keydown", onKeyDown);
     return () => {
+      desktop.removeEventListener("change", closeOnDesktop);
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
       (previousFocus ?? moreButtonRef.current)?.focus({ preventScroll: true });
@@ -94,7 +99,8 @@ export function MobileAdminNav({
         <button
           ref={moreButtonRef}
           aria-expanded={open}
-          aria-controls="admin-more-menu"
+          aria-controls={open ? "admin-more-menu" : undefined}
+          aria-label={secondaryActive ? `更多管理模块，当前：${items.find((item) => item.key === activeView)?.label}` : "更多管理模块"}
           aria-haspopup="dialog"
           className={`flex min-h-14 flex-col items-center justify-center gap-1.5 border-t-2 px-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${secondaryActive ? "border-primary bg-primary/5 font-semibold text-primary" : "border-transparent text-muted-foreground hover:bg-muted"}`}
           onClick={() => setOpen(true)}

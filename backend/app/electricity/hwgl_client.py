@@ -493,20 +493,20 @@ def _query_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _required_decimal(record: dict[str, Any], key: str) -> Decimal:
-    value = record.get(key)
-    if value in (None, ""):
-        return Decimal("0")
-    return Decimal(str(value))
+    return _optional_decimal(record.get(key)) or Decimal("0")
 
 
 def _optional_decimal(value: Any) -> Decimal | None:
     if value in (None, ""):
         return None
-    return Decimal(str(value))
+    number = Decimal(str(value))
+    if not number.is_finite():
+        raise HwglClientError("parse", "电量记录包含非有限数值")
+    return number
 
 
 def _balance_from_record(record: dict[str, Any]) -> Decimal:
-    if not any(key in record for key in ("payele", "freeele", "lossele")):
+    if not any(record.get(key) not in (None, "") for key in ("payele", "freeele", "lossele")):
         raise HwglClientError("parse", "电量记录缺少余额字段")
     return _required_decimal(record, "payele") + _required_decimal(record, "freeele") - _required_decimal(record, "lossele")
 

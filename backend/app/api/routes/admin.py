@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
 from app.api.routes import admin_announcements, admin_appearance, admin_hwgl, admin_logs, admin_rooms, admin_status
-from app.api.routes.admin_common import audit, next_smtp_id, smtp_out, token_out
+from app.api.routes.admin_common import audit, next_smtp_id, numeric_search_id, smtp_out, token_out
 from app.api.routes.auth import ensure_email_shape, normalize_email
 from app.core.security import DUMMY_PASSWORD_HASH, hash_password, password_needs_rehash, sign_access_token, verify_password
 from app.electricity.client import CampusElectricityClient
@@ -17,6 +17,7 @@ from app.models.room import Room
 from app.models.smtp_settings import SmtpSettings
 from app.models.user import User
 from app.models.user_room import UserRoom
+from app.schemas import DatabaseId
 from app.schemas.admin import (
     AdminAuthTokenCreate,
     AdminAuthTokenOut,
@@ -180,8 +181,8 @@ def list_users_page(
     if keyword:
         pattern = f"%{keyword}%"
         search_terms = [User.email.ilike(pattern), User.notification_email.ilike(pattern)]
-        if keyword.isdigit():
-            search_terms.append(User.id == int(keyword))
+        if (search_id := numeric_search_id(keyword)) is not None:
+            search_terms.append(User.id == search_id)
         filters.append(or_(*search_terms))
 
     total = int(db.scalar(select(func.count(User.id)).where(*filters)) or 0)
@@ -199,7 +200,7 @@ def list_users_page(
         .outerjoin(room_counts, room_counts.c.user_id == User.id)
         .where(*filters)
         .order_by(*order_columns[sort])
-        .offset((page - 1) * page_size)
+        .offset(min((page - 1) * page_size, total))
         .limit(page_size)
     )
     items = [_managed_user_out(db, user, room_count=int(room_count)) for user, room_count in rows]
@@ -214,7 +215,7 @@ def list_users_page(
 
 @router.get("/users/{user_id}", response_model=AdminManagedUserDetailOut)
 def get_user_detail(
-    user_id: int,
+    user_id: DatabaseId,
     _: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> AdminManagedUserDetailOut:
@@ -235,7 +236,7 @@ def get_user_detail(
 
 @router.patch("/users/{user_id}", response_model=AdminManagedUserDetailOut)
 def update_user_config(
-    user_id: int,
+    user_id: DatabaseId,
     payload: AdminManagedUserUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -249,9 +250,9 @@ def update_user_config(
         if payload.notification_email:
             email = normalize_email(payload.notification_email)
             ensure_email_shape(email)
-            user.notification_email = email
-            if payload.notification_email_verified is not True:
+            if email != user.notification_email:
                 user.notification_email_verified_at = None
+            user.notification_email = email
         else:
             user.notification_email = None
             user.notification_email_verified_at = None
@@ -273,7 +274,7 @@ def update_user_config(
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
-    user_id: int,
+    user_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> None:
@@ -298,8 +299,8 @@ def get_user_room_for_admin(db: Session, user_id: int, binding_id: int) -> UserR
 
 @router.patch("/users/{user_id}/rooms/{binding_id}", response_model=UserRoomOut)
 def update_user_room_config(
-    user_id: int,
-    binding_id: int,
+    user_id: DatabaseId,
+    binding_id: DatabaseId,
     payload: AdminManagedUserRoomUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -333,8 +334,8 @@ def update_user_room_config(
 
 @router.delete("/users/{user_id}/rooms/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user_room_binding(
-    user_id: int,
-    binding_id: int,
+    user_id: DatabaseId,
+    binding_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> None:
@@ -373,8 +374,8 @@ def create_token(
     db: Session = Depends(db_session),
 ) -> AdminAuthTokenOut:
     token = AuthToken(
-        name=payload.name.strip(),
-        token_value=payload.token_value.strip(),
+        name=payload.name,
+        token_value=payload.token_value,
         min_interval_seconds=payload.min_interval_seconds,
         enabled=payload.enabled,
     )
@@ -392,7 +393,7 @@ def create_token(
 
 @router.patch("/tokens/{token_id}", response_model=AdminAuthTokenOut)
 def update_token(
-    token_id: int,
+    token_id: DatabaseId,
     payload: AdminAuthTokenUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -401,9 +402,9 @@ def update_token(
     if token is None:
         raise HTTPException(status_code=404, detail="token not found")
     if payload.name is not None:
-        token.name = payload.name.strip()
+        token.name = payload.name
     if payload.token_value is not None:
-        token.token_value = payload.token_value.strip()
+        token.token_value = payload.token_value
     if payload.min_interval_seconds is not None:
         token.min_interval_seconds = payload.min_interval_seconds
     if payload.enabled is not None:
@@ -427,7 +428,7 @@ def update_token(
 
 @router.post("/tokens/{token_id}/test", response_model=AdminHealthTestOut)
 def test_token(
-    token_id: int,
+    token_id: DatabaseId,
     payload: AdminTokenHealthTestRequest,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -460,7 +461,7 @@ def test_token(
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_token(
-    token_id: int,
+    token_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> None:
@@ -489,12 +490,12 @@ def create_smtp_settings(
 ) -> SmtpSettingsOut:
     row = SmtpSettings(
         id=next_smtp_id(db),
-        name=payload.name.strip(),
-        host=payload.host.strip(),
+        name=payload.name,
+        host=payload.host,
         port=payload.port,
         username=payload.username.strip() if payload.username else None,
         password=payload.password or None,
-        from_email=payload.from_email.strip(),
+        from_email=payload.from_email,
         enabled=payload.enabled,
         min_interval_seconds=payload.min_interval_seconds,
         use_ssl=payload.use_ssl,
@@ -514,7 +515,7 @@ def create_smtp_settings(
 
 @router.patch("/smtp/{smtp_id}", response_model=SmtpSettingsOut)
 def update_smtp_settings(
-    smtp_id: int,
+    smtp_id: DatabaseId,
     payload: SmtpSettingsUpdate,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
@@ -523,9 +524,9 @@ def update_smtp_settings(
     if row is None:
         raise HTTPException(status_code=404, detail="smtp account not found")
     if payload.name is not None:
-        row.name = payload.name.strip()
+        row.name = payload.name
     if payload.host is not None:
-        row.host = payload.host.strip() or None
+        row.host = payload.host
     if payload.port is not None:
         row.port = payload.port
     if payload.username is not None:
@@ -533,7 +534,7 @@ def update_smtp_settings(
     if payload.password is not None:
         row.password = payload.password or None
     if payload.from_email is not None:
-        row.from_email = payload.from_email.strip() or None
+        row.from_email = payload.from_email
     if payload.enabled is not None:
         row.enabled = payload.enabled
     if payload.min_interval_seconds is not None:
@@ -557,7 +558,7 @@ def update_smtp_settings(
 
 @router.delete("/smtp/{smtp_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_smtp_settings(
-    smtp_id: int,
+    smtp_id: DatabaseId,
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> None:
@@ -582,7 +583,7 @@ def test_smtp_settings(
 
 @router.post("/smtp/{smtp_id}/test")
 def test_one_smtp_settings(
-    smtp_id: int,
+    smtp_id: DatabaseId,
     payload: SmtpTestRequest,
     _: AdminUser = Depends(current_admin),
 ) -> dict[str, str]:
@@ -612,9 +613,8 @@ def patch_runtime_settings(
     admin: AdminUser = Depends(current_admin),
     db: Session = Depends(db_session),
 ) -> RuntimeSettingsOut:
-    runtime = update_runtime_config(db, payload.model_dump(exclude_unset=True))
     audit(db, admin, "update_runtime_settings", "app_settings", None, {"fields": list(payload.model_fields_set)})
-    db.commit()
+    runtime = update_runtime_config(db, payload.model_dump(exclude_unset=True))
     return RuntimeSettingsOut(**runtime.__dict__)
 
 

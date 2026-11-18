@@ -1,3 +1,4 @@
+import type { ApiClient } from "../../lib/api";
 import type { AdminPageQuery, AdminRoom, AdminRoomPage } from "../../lib/types";
 import { formatDateTime, formatKwh } from "../../lib/utils";
 import { Badge } from "../ui/badge";
@@ -7,26 +8,33 @@ import { PaginationControls } from "../ui/pagination";
 import { ListSkeleton } from "../ui/skeleton";
 import { ListToolbar } from "./toolbars";
 import { ChartSpline, Loader2, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { AdminRoomChart } from "./AdminRoomChart";
 
 export function AdminRoomsPanel({
+  api,
   pageData,
   query,
   onQueryChange,
   loading,
+  listProblem,
   deletingBindingId,
   onDeleteBinding
 }: {
+  api: ApiClient;
   pageData?: AdminRoomPage;
   query: AdminPageQuery;
   onQueryChange: (query: AdminPageQuery) => void;
   loading: boolean;
+  listProblem: ReactNode;
   deletingBindingId?: number | null;
   onDeleteBinding: (userId: number, bindingId: number) => void;
 }) {
   const [roomSearch, setRoomSearch] = useState(query.q);
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
+  const chartRegion = useRef<HTMLDivElement>(null);
+  const chartTrigger = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => { if (selectedRoomId !== null) chartRegion.current?.focus(); }, [selectedRoomId]);
 
   function newestBindingAt(item: AdminRoom) {
     return item.bindings.reduce<string | null>((latest, binding) => {
@@ -79,11 +87,11 @@ export function AdminRoomsPanel({
           ]}
         />
         {selectedRoom ? (
-          <div className="mb-4">
-            <AdminRoomChart room={selectedRoom} onClose={() => setSelectedRoomId(null)} />
+          <div ref={chartRegion} tabIndex={-1} role="region" aria-label="宿舍电量曲线" className="mb-4 scroll-mt-24">
+            <AdminRoomChart api={api} room={selectedRoom} onClose={() => { setSelectedRoomId(null); chartTrigger.current?.focus(); }} />
           </div>
         ) : null}
-        {loading ? (
+        {listProblem || (loading ? (
           <ListSkeleton rows={5} />
         ) : visibleRooms.length === 0 && !query.q ? (
           <div className="flex h-44 items-center justify-center rounded-lg border border-border text-sm text-muted-foreground">
@@ -127,7 +135,7 @@ export function AdminRoomsPanel({
                       </div>
                         <div className="mt-1 text-[11px] text-muted-foreground">{item.reading_count ?? 0} 条读数</div>
                       </td>
-                      <td data-label="绑定详情" className="min-w-[280px] px-4 py-3">
+                      <td data-label="绑定详情" className="min-w-0 px-4 py-3">
                         <div className="mb-2"><Badge tone="success">{item.binding_count} 个绑定</Badge></div>
                         <div className="space-y-2">
                           {item.bindings.map((binding) => (
@@ -139,9 +147,16 @@ export function AdminRoomsPanel({
                               <div className="mt-1 break-all text-[11px] text-muted-foreground">
                                 提醒：{binding.notification_email || binding.email}
                                 <span className={binding.notification_email_verified ? "ml-2 text-success" : "ml-2"}>
-                                  {binding.notification_email_verified ? "已验证" : "账号邮箱"}
+                                  {binding.notification_email ? (binding.notification_email_verified ? "已验证" : "待验证") : "账号邮箱"}
                                 </span>
                               </div>
+                              <Button
+                                size="sm" variant="ghost" disabled={deletingBindingId != null}
+                                aria-label={`删除 ${binding.email} 的宿舍绑定 #${binding.binding_id}`}
+                                onClick={() => onDeleteBinding(binding.user_id, binding.binding_id)}>
+                                {deletingBindingId === binding.binding_id ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                                删除此绑定
+                              </Button>
                             </div>
                           ))}
                         </div>
@@ -152,23 +167,15 @@ export function AdminRoomsPanel({
                           <Button
                             size="sm"
                             variant={selectedRoomId === item.room.id ? "primary" : "secondary"}
-                            onClick={() => setSelectedRoomId((current) => current === item.room.id ? null : item.room.id)}
+                            aria-expanded={selectedRoomId === item.room.id}
+                            onClick={(event) => {
+                              chartTrigger.current = event.currentTarget;
+                              setSelectedRoomId((current) => current === item.room.id ? null : item.room.id);
+                            }}
                           >
                             <ChartSpline size={14} />
                             {selectedRoomId === item.room.id ? "收起曲线" : "查看曲线"}
                           </Button>
-                          {item.bindings.map((binding) => (
-                            <Button
-                              key={binding.binding_id}
-                              size="sm"
-                              variant="ghost"
-                              disabled={deletingBindingId === binding.binding_id}
-                              onClick={() => onDeleteBinding(binding.user_id, binding.binding_id)}
-                            >
-                              {deletingBindingId === binding.binding_id ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
-                              删除绑定
-                            </Button>
-                          ))}
                         </div>
                       </td>
                     </tr>
@@ -187,7 +194,7 @@ export function AdminRoomsPanel({
             onPageSizeChange={(pageSize) => onQueryChange({ ...query, page: 1, page_size: pageSize })}
           />
           </>
-        )}
+        ))}
       </CardContent>
     </Card>
   );

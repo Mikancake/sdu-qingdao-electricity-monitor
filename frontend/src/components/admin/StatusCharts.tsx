@@ -187,8 +187,8 @@ export const HealthOverview = memo(function HealthOverview({
       </div>
       <div className="grid gap-5">
         <HealthBar detail={`${verifiedUsers}/${totalUsers}`} label="用户验证率" total={totalUsers} value={verifiedUsers} />
-        <HealthBar detail={`${enabledTokens}/${tokenCount}`} label="可用 Token" tone="warning" total={tokenCount} value={enabledTokens} />
-        <HealthBar detail={`${enabledSmtp}/${smtpCount}`} label="可用 SMTP" tone="success" total={smtpCount} value={enabledSmtp} />
+        <HealthBar detail={`${enabledTokens}/${tokenCount}`} label="已启用 Token" tone="warning" total={tokenCount} value={enabledTokens} />
+        <HealthBar detail={`${enabledSmtp}/${smtpCount}`} label="已启用 SMTP" tone="success" total={smtpCount} value={enabledSmtp} />
         <HealthBar
           detail={recentEmailTotal ? `${Math.round((recentSentEmails / recentEmailTotal) * 100)}%` : "暂无数据"}
           label="24h 发信成功率"

@@ -1,6 +1,7 @@
 """Token-aware orchestration around provider-specific electricity clients."""
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 
 from app.electricity.client import ElectricityQueryResult
 from app.electricity.provider import provider_requires_token, query_electricity
@@ -59,13 +60,18 @@ def apply_query_resolution(room: Room, result: ElectricityQueryResult) -> None:
         room.provider_floor = result.resolved_floor
 
 
+def stored_reading_balance(value: Decimal) -> Decimal:
+    # Numeric(10, 2): apply the same precision to inserts, updates and keys.
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def reading_from_query(room_id: int, result: ElectricityQueryResult, *, source: str) -> ElectricityReading:
     """Convert a successful provider result into a database reading."""
     if not result.success or result.balance is None:
         raise ValueError("cannot create a reading from an unsuccessful query")
     return ElectricityReading(
         room_id=room_id,
-        balance=result.balance,
+        balance=stored_reading_balance(result.balance),
         source=source,
         provider=result.provider,
         provider_updated_at=result.provider_updated_at,

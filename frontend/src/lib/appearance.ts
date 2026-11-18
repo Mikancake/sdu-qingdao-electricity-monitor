@@ -1,8 +1,7 @@
 import type { AppearanceSettings } from "./types";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  (import.meta.env.DEV ? "http://127.0.0.1:8000" : window.location.origin);
+import { API_BASE_URL } from "./api";
+
 export const APPEARANCE_STORAGE_KEY = "sdu-electricity-appearance";
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
@@ -12,11 +11,11 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   light_background_blurred_url: null,
   dark_background_blurred_url: null,
   background_position: "center",
-  background_overlay_opacity: 0.28,
-  background_blur_px: 4,
-  glass_card_opacity: 0.7,
-  glass_blur_px: 8,
-  glass_effect_mode: "frosted"
+  background_overlay_opacity: 0.42,
+  background_blur_px: 0,
+  glass_card_opacity: 0.62,
+  glass_blur_px: 10,
+  glass_effect_mode: "lite"
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
@@ -42,7 +41,8 @@ function normalizeGlassEffectMode(value: unknown): AppearanceSettings["glass_eff
 }
 
 export function normalizeAppearanceSettings(settings?: Partial<AppearanceSettings> | null): AppearanceSettings {
-  const lightBackground = settings?.light_background_image_url?.trim() || settings?.background_image_url?.trim() || null;
+  const lightBackground = (settings?.light_background_image_url === undefined
+    ? settings?.background_image_url : settings.light_background_image_url)?.trim() || null;
   const darkBackground = settings?.dark_background_image_url?.trim() || null;
   const lightBlurred = settings?.light_background_blurred_url?.trim() || null;
   const darkBlurred = settings?.dark_background_blurred_url?.trim() || (!darkBackground ? lightBlurred : null);
@@ -73,7 +73,8 @@ function safeCssUrl(value?: string | null) {
   }
 
   try {
-    const parsed = new URL(trimmed, window.location.origin);
+    const apiOrigin = new URL(API_BASE_URL || "/", window.location.origin).origin;
+    const parsed = new URL(trimmed, trimmed.startsWith("/uploads/") ? apiOrigin : window.location.origin);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:" && parsed.protocol !== "data:") {
       return "none";
     }
@@ -81,11 +82,10 @@ function safeCssUrl(value?: string | null) {
     if (/\.(gif|mp4|webm|mov|m4v|avi)$/.test(lowerPath) || parsed.href.toLowerCase().startsWith("data:image/gif")) {
       return "none";
     }
+    return `url("${parsed.href.replace(/["\\\n\r]/g, "")}")`;
   } catch {
     return "none";
   }
-
-  return `url("${trimmed.replace(/["\\\n\r]/g, "")}")`;
 }
 
 export function readStoredAppearanceSettings(): AppearanceSettings {

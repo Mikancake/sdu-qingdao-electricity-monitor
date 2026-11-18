@@ -334,12 +334,12 @@ def build_usage_stats(
         threshold = effective_average * Decimal(alert_days)
         threshold_source = effective_source
     days_remaining = (
-        latest.balance / effective_average if effective_average > 0 else None
+        max(Decimal("0"), latest.balance) / effective_average if effective_average > 0 else None
     )
     days_remaining_source = effective_source
     is_low_power = latest.balance <= threshold
 
-    current_price = latest.electricity_price or room_price
+    current_price = latest.electricity_price if latest.electricity_price is not None else room_price
     estimated_amount = latest.estimated_amount
     if estimated_amount is None and current_price is not None:
         estimated_amount = latest.balance * current_price
@@ -392,8 +392,11 @@ def get_room_usage_stats(
         provider=current_provider,
         days=days or runtime.usage_history_days,
         limit=limit,
-        ascending=True,
+        ascending=False,
     )
+    # Limit the newest points before restoring the chronological order used
+    # by charts and notification.reading_id (readings[-1]).
+    readings.reverse()
     return (
         build_usage_stats(
             readings,

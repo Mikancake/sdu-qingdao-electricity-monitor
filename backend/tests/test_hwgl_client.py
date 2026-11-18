@@ -383,3 +383,14 @@ def test_hwgl_query_price_parses_current_electricity_price() -> None:
     assert price.price == Decimal("0.52")
     assert price.fetched_at.tzinfo is not None
     assert http.calls[1][0].endswith("/electricityPrice/search")
+
+
+@pytest.mark.parametrize("value", [None, "", "NaN", "Infinity"])
+def test_hwgl_invalid_balance_is_not_a_successful_reading(value) -> None:
+    target = room()
+    target.provider_room_key = "test-key"
+    target.provider_line_id = "10"
+    http = FakeHttpClient(FakeResponse(reading_payload(records=[{"payele": value}])))
+    result = HwglElectricityClient(http_client=http).query_room_for_date(target, date(2026, 8, 28))
+    assert not result.success and result.balance is None
+    assert result.error_kind == "parse"

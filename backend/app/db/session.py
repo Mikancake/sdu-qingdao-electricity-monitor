@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
@@ -28,6 +29,16 @@ if engine.dialect.name == "sqlite":
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+def stored_datetime_key(db: Session, value: datetime | None) -> datetime | None:
+    """Match DateTime(timezone=True) round trips without rewriting legacy data."""
+    if value is None or value.tzinfo is None:
+        return value
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite's DateTime adapter drops the offset, preserving wall time.
+        return value.replace(tzinfo=None)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def get_db() -> Generator[Session, None, None]:

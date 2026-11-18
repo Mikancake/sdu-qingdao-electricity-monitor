@@ -6,8 +6,17 @@ from sqlalchemy.orm import Session
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_user import AdminUser
 from app.models.auth_token import AuthToken
+from app.schemas import MAX_DATABASE_ID
 from app.models.smtp_settings import SmtpSettings
 from app.schemas.admin import AdminAuthTokenOut, SmtpSettingsOut
+
+
+def numeric_search_id(keyword: str) -> int | None:
+    # A keyword can be a room number or an email fragment rather than an id.
+    if not keyword.isdecimal():
+        return None
+    value = int(keyword)
+    return value if value <= MAX_DATABASE_ID else None
 
 
 def audit(

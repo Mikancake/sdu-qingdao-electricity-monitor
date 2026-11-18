@@ -24,7 +24,7 @@ class PasswordUpdateRequest(BaseModel):
 
 class EmailVerifyRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^[0-9]{6}$")
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -34,7 +34,7 @@ class NotificationEmailRequest(BaseModel):
 
 class NotificationEmailVerifyRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class UserPreferencesUpdate(BaseModel):

@@ -68,6 +68,22 @@ def create_verification_code(
     return record, code
 
 
+def consume_verification_code(db: Session, record: EmailVerificationCode) -> None:
+    now = now_like(record.expires_at)
+    claimed = db.execute(
+        update(EmailVerificationCode)
+        .where(
+            EmailVerificationCode.id == record.id,
+            EmailVerificationCode.consumed_at.is_(None),
+            EmailVerificationCode.expires_at >= now,
+        )
+        .values(consumed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        raise HTTPException(status_code=400, detail="invalid or expired verification code")
+
+
 def consume_pending_register_codes(db: Session, email: str) -> None:
     db.execute(
         update(EmailVerificationCode)
@@ -86,11 +102,16 @@ def clean_legacy_unverified_user(db: Session, user: User | None) -> None:
 
 
 def ensure_verification_email_not_cooling(db: Session, email: str, purpose: str) -> None:
+    purpose_filter = EmailVerificationCode.purpose == purpose
+    if purpose == "notification_email":
+        # Delivery cooldown is per mailbox, even when different accounts
+        # request separate, account-bound notification challenges.
+        purpose_filter = purpose_filter | EmailVerificationCode.purpose.startswith("notify:")
     latest_delivered_at = db.scalar(
         select(EmailVerificationCode.delivered_at)
         .where(
             EmailVerificationCode.email == email,
-            EmailVerificationCode.purpose == purpose,
+            purpose_filter,
             EmailVerificationCode.delivered_at.is_not(None),
         )
         .order_by(EmailVerificationCode.delivered_at.desc())
@@ -151,7 +172,7 @@ def register(request: Request, payload: UserCreate, db: Session = Depends(db_ses
 
 
 @router.post("/request-verification-code", response_model=RegisterOut)
-def request_verification_code(request: Request, payload: UserLogin, db: Session = Depends(db_session)) -> RegisterOut:
+def request_verification_code(request: Request, payload: UserCreate, db: Session = Depends(db_session)) -> RegisterOut:
     email = normalize_email(payload.email)
     ensure_email_shape(email)
     enforce_rate_limit(client_rate_limit_key(request, "auth:request-code"), limit=40, window_seconds=60 * 60)
@@ -189,7 +210,7 @@ def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = De
             EmailVerificationCode.consumed_at.is_(None),
             EmailVerificationCode.expires_at >= now,
         )
-        .order_by(EmailVerificationCode.created_at.desc())
+        .order_by(EmailVerificationCode.created_at.desc(), EmailVerificationCode.id.desc())
         .limit(5)
     )
     records = list(db.scalars(stmt))
@@ -197,7 +218,10 @@ def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = De
     if matched is None or matched.password_hash is None or not verify_password(payload.password, matched.password_hash):
         raise HTTPException(status_code=400, detail="invalid or expired verification code")
 
-    user = db.scalar(select(User).where(User.email == email))
+    consume_verification_code(db, matched)
+    user = db.scalar(select(User).where(User.email == email).with_for_update())
+    if user is not None and user.is_verified:
+        raise HTTPException(status_code=409, detail="email already registered")
     if user is None:
         user = User(email=email, password_hash=matched.password_hash, is_verified=True)
         db.add(user)
@@ -206,16 +230,8 @@ def verify_email(request: Request, payload: EmailVerifyRequest, db: Session = De
         user.is_verified = True
     user.notification_email = user.email
     user.notification_email_verified_at = now_like(user.notification_email_verified_at)
-    db.execute(
-        update(EmailVerificationCode)
-        .where(
-            EmailVerificationCode.email == email,
-            EmailVerificationCode.purpose == "register",
-            EmailVerificationCode.consumed_at.is_(None),
-        )
-        .values(consumed_at=now)
-    )
     try:
+        consume_pending_register_codes(db, email)
         db.commit()
     except IntegrityError as exc:
         db.rollback()

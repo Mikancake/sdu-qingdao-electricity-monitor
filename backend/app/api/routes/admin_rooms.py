@@ -6,6 +6,8 @@ from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import current_admin, db_session
+from app.schemas import DatabaseId
+from app.api.routes.admin_common import numeric_search_id
 from app.models.admin_user import AdminUser
 from app.models.electricity_reading import ElectricityReading
 from app.models.electricity_recharge import ElectricityRecharge
@@ -70,6 +72,14 @@ def _admin_room_out(
     )
 
 
+def _latest_reading_order():
+    return (
+        func.coalesce(ElectricityReading.provider_updated_at, ElectricityReading.read_at).desc(),
+        ElectricityReading.read_at.desc(),
+        ElectricityReading.id.desc(),
+    )
+
+
 def _load_admin_rooms(db: Session, room_ids: list[int]) -> list[AdminRoomOut]:
     if not room_ids:
         return []
@@ -99,11 +109,7 @@ def _load_admin_rooms(db: Session, room_ids: list[int]) -> list[AdminRoomOut]:
             func.row_number()
             .over(
                 partition_by=ElectricityReading.room_id,
-                order_by=(
-                    func.coalesce(ElectricityReading.provider_updated_at, ElectricityReading.read_at).desc(),
-                    ElectricityReading.read_at.desc(),
-                    ElectricityReading.id.desc(),
-                ),
+                order_by=_latest_reading_order(),
             )
             .label("position"),
         )
@@ -149,11 +155,12 @@ def _load_admin_rooms(db: Session, room_ids: list[int]) -> list[AdminRoomOut]:
         for row in reading_rows
     }
     recharge_by_room: dict[int, list[ElectricityRecharge]] = {}
-    if room_ids and inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+    hwgl_room_ids = [room.id for room in rooms if room.provider == HWGL_PROVIDER]
+    if hwgl_room_ids and inspect(db.connection()).has_table(ElectricityRecharge.__tablename__):
         recharge_rows = db.scalars(
             select(ElectricityRecharge)
             .where(
-                ElectricityRecharge.room_id.in_(room_ids),
+                ElectricityRecharge.room_id.in_(hwgl_room_ids),
                 ElectricityRecharge.provider == HWGL_PROVIDER,
             )
             .order_by(ElectricityRecharge.paid_at.desc(), ElectricityRecharge.id.desc())
@@ -210,8 +217,7 @@ def list_admin_rooms(
     room_ids = list(
         db.scalars(
             select(Room.id)
-            .join(UserRoom, UserRoom.room_id == Room.id)
-            .distinct()
+            .where(Room.user_rooms.any())
             .order_by(Room.building_name, Room.room_number, Room.id)
         )
     )
@@ -238,8 +244,8 @@ def list_admin_rooms_page(
             User.email.ilike(pattern),
             User.notification_email.ilike(pattern),
         ]
-        if keyword.isdigit():
-            search_terms.append(Room.id == int(keyword))
+        if (search_id := numeric_search_id(keyword)) is not None:
+            search_terms.append(Room.id == search_id)
         if keyword in {"启用", "正常"}:
             search_terms.append(UserRoom.enabled.is_(True))
         if keyword in {"停用", "禁用"}:
@@ -256,7 +262,7 @@ def list_admin_rooms_page(
             ElectricityReading.room_id == Room.id,
             ElectricityReading.provider == Room.provider,
         )
-        .order_by(ElectricityReading.read_at.desc(), ElectricityReading.id.desc())
+        .order_by(*_latest_reading_order())
         .limit(1)
         .correlate(Room)
         .scalar_subquery()
@@ -277,7 +283,7 @@ def list_admin_rooms_page(
         .join(UserRoom, UserRoom.room_id == Room.id)
         .group_by(Room.id)
         .order_by(*order_columns[sort])
-        .offset((page - 1) * page_size)
+        .offset(min((page - 1) * page_size, total))
         .limit(page_size)
     )
     room_ids = [int(row.id) for row in rows]
@@ -292,7 +298,7 @@ def list_admin_rooms_page(
 
 @router.get("/rooms/{room_id}/readings", response_model=list[ElectricityReadingOut])
 def list_admin_room_readings(
-    room_id: int,
+    room_id: DatabaseId,
     limit: int = Query(default=500, ge=1, le=5000),
     days: int | None = Query(default=None, ge=1, le=365),
     start_at: datetime | None = Query(default=None),
@@ -318,7 +324,7 @@ def list_admin_room_readings(
 
 @router.get("/rooms/{room_id}/recharges", response_model=list[ElectricityRechargeOut])
 def list_admin_room_recharges(
-    room_id: int,
+    room_id: DatabaseId,
     limit: int = Query(default=100, ge=1, le=500),
     days: int | None = Query(default=None, ge=1, le=730),
     _: AdminUser = Depends(current_admin),
@@ -329,7 +335,7 @@ def list_admin_room_recharges(
         raise HTTPException(status_code=404, detail="room not found")
     if room.provider != HWGL_PROVIDER:
         return []
-    if not inspect(db.get_bind()).has_table(ElectricityRecharge.__tablename__):
+    if not inspect(db.connection()).has_table(ElectricityRecharge.__tablename__):
         return []
     stmt = (
         select(ElectricityRecharge)

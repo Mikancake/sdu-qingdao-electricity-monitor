@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { BatteryCharging, Building2, History, LayoutDashboard, Loader2, LogOut, Moon, RefreshCcw, Settings, Sun, UserRound } from "lucide-react";
 
@@ -11,6 +11,7 @@ interface AppShellProps {
   activeView: ViewKey;
   children: ReactNode;
   darkMode: boolean;
+  refreshing?: boolean;
   user?: User;
   userLoading: boolean;
   userError: boolean;
@@ -37,6 +38,7 @@ export function AppShell({
   activeView,
   children,
   darkMode,
+  refreshing = false,
   user,
   userLoading,
   userError,
@@ -47,20 +49,27 @@ export function AppShell({
 }: AppShellProps) {
   const accountEmail = user?.email ?? (userLoading ? "账号信息加载中" : userError ? "账号信息加载失败" : "未获取到账号");
   const accountStatus = user
-    ? "已验证账号"
+    ? (user.is_verified ? "已验证账号" : "邮箱尚未验证")
     : userLoading
       ? "正在读取账号"
       : userError
         ? "请刷新数据或重新登录"
         : "暂无账号信息";
   const activeNav = navItems.find(item => item.key === activeView);
+  const contentRef = useRef<HTMLElement>(null);
+  const previousView = useRef(activeView);
 
   useEffect(() => {
+    if (previousView.current !== activeView) {
+      previousView.current = activeView;
+      contentRef.current?.focus({ preventScroll: true });
+    }
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [activeView]);
 
   return (
     <div className="app-background min-h-screen text-foreground">
+      <a href="#workspace-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-panel focus:px-4 focus:py-2 focus:text-primary focus:outline focus:outline-2">跳到主要内容</a>
       <aside className="workspace-sidebar fixed inset-y-0 left-0 z-30 hidden w-52 flex-col overflow-y-auto border-r border-border bg-panel lg:flex">
         <div className="px-6 pb-8 pt-8">
           <div className="flex items-center gap-3">
@@ -102,7 +111,7 @@ export function AppShell({
               <p className="mt-1 truncate text-[10px] text-muted-foreground sm:text-xs">{viewDescriptions[activeView]}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <Button aria-label="刷新数据" size="icon" variant="ghost" onClick={onRefresh} title="刷新数据"><RefreshCcw size={16} /></Button>
+              <Button type="button" aria-label={refreshing ? "正在刷新数据" : "刷新数据"} aria-busy={refreshing} disabled={refreshing} size="icon" variant="ghost" onClick={onRefresh} title={refreshing ? "正在刷新数据" : "刷新数据"}><RefreshCcw size={16} className={refreshing ? "motion-safe:animate-spin" : undefined} /></Button>
               <Button aria-label={darkMode ? "切换为浅色主题" : "切换为深色主题"} size="icon" variant="ghost" onClick={onToggleTheme} title={darkMode ? "切换为浅色主题" : "切换为深色主题"}>{darkMode ? <Sun size={16} /> : <Moon size={16} />}</Button>
               <Button aria-label="退出登录" className="lg:hidden" size="icon" variant="ghost" onClick={onLogout} title="退出登录"><LogOut size={16} /></Button>
             </div>
@@ -114,10 +123,6 @@ export function AppShell({
           </div>
         </header>
 
-        <main id="workspace-content" tabIndex={-1} className="workspace-main mx-auto w-full min-w-0 max-w-[1440px] px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 outline-none sm:px-7 lg:px-8 lg:pb-12 lg:pt-9">
-          <div key={activeView} className="page-transition min-w-0">{children}</div>
-        </main>
-
         <nav aria-label="用户移动导航" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-border bg-panel px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:hidden">
           {navItems.map(item => (
             <button key={item.key} type="button" aria-current={activeView === item.key ? "page" : undefined} onClick={() => onChangeView(item.key)} className={`mx-2 flex min-h-14 flex-col items-center justify-center gap-1 border-t-2 py-2 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${activeView === item.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
@@ -125,6 +130,10 @@ export function AppShell({
             </button>
           ))}
         </nav>
+
+        <main ref={contentRef} id="workspace-content" aria-label={activeNav?.label} tabIndex={-1} className="workspace-main mx-auto w-full min-w-0 max-w-[1440px] scroll-mt-28 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 focus-visible:outline-primary sm:px-7 lg:scroll-mt-16 lg:px-8 lg:pb-12 lg:pt-9">
+          <div key={activeView} className="page-transition min-w-0">{children}</div>
+        </main>
       </div>
     </div>
   );

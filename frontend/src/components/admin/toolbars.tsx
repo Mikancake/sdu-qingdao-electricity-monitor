@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown, Search } from "lucide-react";
 
 import { Input } from "../ui/input";
@@ -58,15 +58,21 @@ export function ListToolbar({
 }
 
 export function LogToolbar({ filters, onChange }: { filters: LogFilters; onChange: (filters: LogFilters) => void }) {
+  const [search, setSearch] = useState(filters.q);
+  useEffect(() => {
+    if (search === filters.q) return;
+    const timer = window.setTimeout(() => onChange({ ...filters, q: search }), 300);
+    return () => window.clearTimeout(timer);
+  }, [filters, onChange, search]);
   function patch(next: Partial<LogFilters>) {
-    onChange({ ...filters, ...next });
+    onChange({ ...filters, q: search, ...next });
   }
 
   return (
     <div className="mb-5 flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-muted/25 p-3 sm:flex-row sm:flex-wrap">
       <div className="flex min-w-0 flex-[2] items-center rounded-lg border border-border bg-panel px-3 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
         <Search aria-hidden="true" className="shrink-0 text-muted-foreground" size={17} />
-        <Input aria-label="搜索日志" className="h-10 min-w-0 border-0 bg-transparent shadow-none focus-visible:ring-0" value={filters.q} onChange={(event) => patch({ q: event.target.value })} placeholder="搜索名称、来源、邮箱或错误" />
+        <Input aria-label="搜索日志" className="h-10 min-w-0 border-0 bg-transparent shadow-none focus-visible:ring-0" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索名称、来源、邮箱或错误" />
       </div>
       <ToolbarSelect ariaLabel="日志时间范围" value={filters.days} onChange={(value) => patch({ days: Number(value) })}>
         <option value={1}>最近 1 天</option><option value={7}>最近 7 天</option><option value={30}>最近 30 天</option><option value={90}>最近 90 天</option><option value={365}>最近 365 天</option><option value={0}>全部时间</option>
