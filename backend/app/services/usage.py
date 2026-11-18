@@ -1,3 +1,4 @@
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -6,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.electricity_reading import ElectricityReading
+from app.models.electricity_recharge import ElectricityRecharge
 from app.models.room import Room
 from app.services.runtime_settings import get_runtime_config
 
@@ -135,139 +137,65 @@ def _ordered_unique_readings(
     return unique
 
 
-def _calculate_balance_drop_average(
-    readings: list[ElectricityReading],
-) -> AverageDailyUsage:
-    if len(readings) < 2:
-        return AverageDailyUsage(value=None, window_hours=None, source="insufficient")
-
-    ordered = _ordered_unique_readings(readings)
-    if len(ordered) < 2:
-        return AverageDailyUsage(value=None, window_hours=None, source="insufficient")
-
-    latest_segment_start = 0
-    latest_segment_reset_reason: str | None = None
-    quiet_hours = Decimal("0")
-
-    for index in range(1, len(ordered)):
-        previous = ordered[index - 1]
-        current = ordered[index]
-        if current.provider != previous.provider:
-            latest_segment_start = index
-            latest_segment_reset_reason = "provider_switch"
-            quiet_hours = Decimal("0")
-            continue
-
-        elapsed_hours = Decimal(
-            str(
-                max(
-                    datetime_key(reading_data_time(current))
-                    - datetime_key(reading_data_time(previous)),
-                    0,
-                )
-            )
-        ) / Decimal("3600")
-        delta = previous.balance - current.balance
-
-        # A long gap is not evidence of continuous consumption. Start the
-        # current period at the first reading after that gap.
-        if elapsed_hours >= Decimal(SILENT_DAYS_TO_SPLIT_ACTIVE_PERIOD * 24):
-            latest_segment_start = index
-            latest_segment_reset_reason = "long_gap"
-            quiet_hours = Decimal("0")
-
-        # A meaningful balance increase normally means a recharge. It is a
-        # hard boundary: readings before it must not affect the new average.
-        if current.balance - previous.balance > BALANCE_INCREASE_TOLERANCE_KWH:
-            latest_segment_start = index
-            latest_segment_reset_reason = "balance_increase"
-            quiet_hours = Decimal("0")
-            continue
-
-        if delta <= QUIET_DAILY_USAGE_KWH:
-            quiet_hours += elapsed_hours
-            if quiet_hours >= Decimal(SILENT_DAYS_TO_SPLIT_ACTIVE_PERIOD * 24):
-                latest_segment_start = index
-                latest_segment_reset_reason = "long_quiet"
-                quiet_hours = Decimal("0")
-            continue
-
-        quiet_hours = Decimal("0")
-
-    segment = ordered[latest_segment_start:]
-    if len(segment) < 2:
-        start_date = reading_data_time(segment[0]).date() if segment else None
-        end_date = reading_data_time(segment[-1]).date() if segment else None
-        return AverageDailyUsage(
-            value=None,
-            window_hours=None,
-            source="insufficient",
-            sample_days=0,
-            basis="最近一次余额上升后还没有足够下降读数",
-            active_period_start=start_date,
-            active_period_end=end_date,
+def _credit_increase(previous: ElectricityReading, current: ElectricityReading) -> bool:
+    # HWGL component balances can reveal a grant even when concurrent usage
+    # hides it in the total. Currency amounts are not metered kWh.
+    return any(
+        before is not None and after is not None and after - before > BALANCE_INCREASE_TOLERANCE_KWH
+        for before, after in (
+            (previous.balance, current.balance),
+            (previous.free_electricity, current.free_electricity),
+            (previous.paid_electricity, current.paid_electricity),
         )
-
-    first_time = reading_data_time(segment[0])
-    last_time = reading_data_time(segment[-1])
-    elapsed_seconds = Decimal(
-        str(max(datetime_key(last_time) - datetime_key(first_time), 0))
-    )
-    window_hours = elapsed_seconds / Decimal("3600")
-    if elapsed_seconds < MIN_AVERAGE_WINDOW_SECONDS:
-        return AverageDailyUsage(
-            value=None,
-            window_hours=window_hours,
-            source="insufficient",
-            sample_days=0,
-            basis="最近一次余额上升后有效下降时间不足 24 小时",
-            active_period_start=first_time.date(),
-            active_period_end=last_time.date(),
-        )
-
-    consumption = Decimal("0")
-    drop_samples = 0
-    for previous, current in zip(segment, segment[1:]):
-        if current.provider != previous.provider:
-            continue
-        delta = previous.balance - current.balance
-        if delta > QUIET_DAILY_USAGE_KWH:
-            consumption += delta
-            drop_samples += 1
-
-    if consumption <= 0 or drop_samples < MIN_DROP_SAMPLES:
-        return AverageDailyUsage(
-            value=None,
-            window_hours=window_hours,
-            source="insufficient",
-            sample_days=drop_samples,
-            basis="最近一次余额上升后有效下降读数不足",
-            active_period_start=first_time.date(),
-            active_period_end=last_time.date(),
-        )
-
-    basis = {
-        "balance_increase": "最近一次余额上升后的余额下降总量 / 实际经过时间",
-        "provider_switch": "最近一次查询源切换后的余额下降总量 / 实际经过时间",
-        "long_gap": "最近一次长时间无读数后的余额下降总量 / 实际经过时间",
-        "long_quiet": "最近一次长时间无有效下降后的余额下降总量 / 实际经过时间",
-    }.get(latest_segment_reset_reason, "余额下降总量 / 实际经过时间")
-    return AverageDailyUsage(
-        value=consumption / (elapsed_seconds / Decimal("86400")),
-        window_hours=window_hours,
-        source="measured",
-        sample_days=drop_samples,
-        basis=basis,
-        active_period_start=first_time.date(),
-        active_period_end=last_time.date(),
     )
 
 
 def calculate_average_daily_usage(
-    readings: list[ElectricityReading],
+    readings: list[ElectricityReading], *, credited_at: tuple[datetime, ...] = (),
 ) -> AverageDailyUsage:
-    """Calculate usage from the latest balance-decline segment."""
-    return _calculate_balance_drop_average(readings)
+    """Estimate from observable intervals; an incoming credit hides one interval, not its history."""
+    ordered = _ordered_unique_readings(readings)
+    credits = sorted(datetime_key(t) for t in credited_at)
+    seconds = consumption = quiet = Decimal(0)
+    drops = 0
+    first = last = None
+    split_after = Decimal(SILENT_DAYS_TO_SPLIT_ACTIVE_PERIOD * 86400)
+    for previous, current in zip(ordered, ordered[1:]):
+        start, end = reading_data_time(previous), reading_data_time(current)
+        t0, t1 = datetime_key(start), datetime_key(end)
+        elapsed = Decimal(str(t1 - t0))
+        boundary = current.provider != previous.provider or elapsed >= split_after
+        if not boundary:
+            # A payment at t0 is already reflected in the starting snapshot.
+            i = bisect_right(credits, t0)
+            if _credit_increase(previous, current) or (i < len(credits) and credits[i] <= t1):
+                quiet = Decimal(0)
+                continue
+            drop = previous.balance - current.balance
+            quiet = quiet + elapsed if drop <= QUIET_DAILY_USAGE_KWH else Decimal(0)
+            boundary = quiet >= split_after
+        if boundary:
+            seconds = consumption = quiet = Decimal(0)
+            drops = 0
+            first = last = None
+            continue
+        first = first or start.date()
+        last = end.date()
+        seconds += elapsed
+        if drop > QUIET_DAILY_USAGE_KWH:
+            consumption += drop
+            drops += 1
+
+    usable = seconds >= MIN_AVERAGE_WINDOW_SECONDS and drops >= MIN_DROP_SAMPLES
+    return AverageDailyUsage(
+        value=consumption / (seconds / Decimal(86400)) if usable else None,
+        window_hours=seconds / Decimal(3600),
+        source="measured" if usable else "insufficient",
+        sample_days=drops,
+        basis="有效区间的余额下降量 / 有效观测时长（跳过充值和赠电区间）" if usable else "有效观测不足 24 小时或不足两次下降",
+        active_period_start=first,
+        active_period_end=last,
+    )
 
 
 def normalize_alert_threshold_mode(
@@ -286,6 +214,7 @@ def build_usage_stats(
     fixed_threshold: Decimal | None,
     default_daily_usage_kwh: float,
     room_price: Decimal | None = None,
+    credited_at: tuple[datetime, ...] = (),
 ) -> UsageStats:
     threshold_mode = normalize_alert_threshold_mode(
         alert_threshold_mode, fixed_threshold
@@ -313,7 +242,7 @@ def build_usage_stats(
 
     ordered = sorted(readings, key=reading_order_key)
     latest = ordered[-1]
-    measured_average = calculate_average_daily_usage(ordered)
+    measured_average = calculate_average_daily_usage(ordered, credited_at=credited_at)
     effective_average = measured_average.value or Decimal(str(default_daily_usage_kwh))
     average_source = (
         measured_average.source
@@ -397,6 +326,17 @@ def get_room_usage_stats(
     # Limit the newest points before restoring the chronological order used
     # by charts and notification.reading_id (readings[-1]).
     readings.reverse()
+    credited_at: tuple[datetime, ...] = ()
+    if current_provider == "hwgl" and len(readings) > 1:
+        # Only completed credits are evidence; pending/failed orders and
+        # orders without a timestamp cannot identify a contaminated interval.
+        credited_at = tuple(db.scalars(select(ElectricityRecharge.paid_at).where(
+            ElectricityRecharge.room_id == room_id,
+            ElectricityRecharge.provider == current_provider,
+            ElectricityRecharge.processing_status == "已入账",
+            ElectricityRecharge.paid_at > reading_data_time(readings[0]),
+            ElectricityRecharge.paid_at <= reading_data_time(readings[-1]),
+        )))
     return (
         build_usage_stats(
             readings,
@@ -405,6 +345,7 @@ def get_room_usage_stats(
             fixed_threshold=fixed_threshold,
             default_daily_usage_kwh=runtime.default_daily_usage_kwh,
             room_price=room.provider_price if room is not None else None,
+            credited_at=credited_at,
         ),
         readings,
     )

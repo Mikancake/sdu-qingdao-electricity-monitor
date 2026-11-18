@@ -8,6 +8,7 @@ from app.db.base import Base
 from app.models.room import Room
 from app.services import usage
 
+from app.models.electricity_recharge import ElectricityRecharge
 from app.models.electricity_reading import ElectricityReading
 from app.services.usage import build_usage_stats, calculate_average_daily_usage
 
@@ -198,7 +199,7 @@ def test_balance_drop_with_only_one_recovery_day_falls_back_to_default() -> None
     assert stats.estimated_daily_usage_source == "default"
 
 
-def test_balance_drop_restarts_after_balance_increase() -> None:
+def test_balance_drop_combines_normal_intervals_on_both_sides_of_recharge() -> None:
     base = datetime(2026, 8, 24, 8)
     readings = [
         reading(1, "100.00", base),
@@ -211,9 +212,8 @@ def test_balance_drop_restarts_after_balance_increase() -> None:
     average = calculate_average_daily_usage(readings)
 
     assert average.source == "measured"
-    assert average.value == Decimal("5")
-    assert average.window_hours == Decimal("48")
-    assert "余额上升后" in average.basis
+    assert average.value == Decimal(20) / 3
+    assert average.window_hours == Decimal("72")
 
 
 def test_balance_drop_ignores_recharge_and_zero_delta() -> None:
@@ -229,8 +229,46 @@ def test_balance_drop_ignores_recharge_and_zero_delta() -> None:
     average = calculate_average_daily_usage(readings)
 
     assert average.source == "measured"
-    assert average.value == Decimal("4")
+    # The genuinely flat day still counts; only the day containing the credit is excluded.
+    assert average.value == Decimal(8) / 3
     assert average.sample_days == 2
+
+
+def test_repeated_credits_retain_measured_rate_and_update_remaining_balance() -> None:
+    base = datetime(2026, 8, 24)
+    points = [reading(i, balance, base + timedelta(days=i))
+              for i, balance in enumerate(["30", "26", "20", "120", "180"])]
+    stats = build_usage_stats(points, alert_days=2, alert_threshold_mode="days",
+                              fixed_threshold=None, default_daily_usage_kwh=9)
+    assert stats.estimated_daily_usage_source == "measured"
+    assert stats.estimated_daily_usage == 5 and stats.usage_window_hours == 48
+    assert stats.latest_balance == 180 and stats.days_remaining == 36 and stats.alert_threshold == 10
+
+
+def test_free_grant_hidden_by_larger_paid_balance_drop() -> None:
+    base = datetime(2026, 8, 24)
+    points = [reading(i, total, base + timedelta(days=i), provider="hwgl")
+              for i, total in enumerate(["50", "46", "40", "39"])]
+    for item, free in zip(points, [0, 0, 0, 8]):
+        item.free_electricity = Decimal(free)
+    assert calculate_average_daily_usage(points).value == 5
+
+
+def test_only_posted_room_orders_exclude_their_own_interval() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    base = datetime.now().replace(microsecond=0) - timedelta(days=4)
+    with Session(engine) as db:
+        db.add(Room(id=1, building_name="demo", building_param="demo", room_number="1", provider="hwgl"))
+        db.add_all(reading(i+1, total, base+timedelta(days=i), provider="hwgl")
+                   for i, total in enumerate(["30", "26", "20", "19", "15"]))
+        for day, status in [(1, "待入账"), (3, "已入账")]:
+            db.add(ElectricityRecharge(room_id=1, provider="hwgl", external_id_hash=str(day),
+                                       processing_status=status, paid_at=base+timedelta(days=day)))
+        db.commit()
+        stats, _ = usage.get_room_usage_stats(db, 1, days=6, alert_days=1, alert_threshold_mode="days", fixed_threshold=None)
+        # Ignore 20 -> 19, not 30 -> 26 or the interval starting at the posted time.
+        assert stats.average_daily_usage == Decimal("4.67") and stats.usage_window_hours == 72
 
 
 def test_balance_drop_after_long_silence_needs_a_second_recovery_sample() -> None:
@@ -248,10 +286,7 @@ def test_balance_drop_after_long_silence_needs_a_second_recovery_sample() -> Non
     assert average.value is None
     assert average.source == "insufficient"
 
-def test_s11_213_balance_average_starts_after_recharge_boundary() -> None:
-    # This online s11-213 regression covers the balance-fallback path after
-    # the 2026-09-01 recharge; it intentionally omits daily_usage and
-    # provider_updated_at. The reported HWGL-day path is tested separately.
+def test_credit_interval_before_first_observable_drop_adds_no_time() -> None:
     base = datetime(2026, 9, 1, 14)
     readings = [
         reading(1, "9.76", base - timedelta(hours=3), provider="hwgl"),

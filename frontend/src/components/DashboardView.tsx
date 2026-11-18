@@ -97,13 +97,13 @@ function usageAverageHint(item: UserRoomSummary) {
     return `当前刚恢复用电，暂参考上一段活跃期的上游日用电数据`;
   }
   if (source === "measured") {
-    return `基于最近${formatUsageWindow(item.usage.usage_window_hours)}的余额下降记录`;
+    return `累计有效观测：${formatUsageWindow(item.usage.usage_window_hours)}；充值、赠电区间不计，之前的用电记录保留。`;
   }
   if (source === "measured_historical") {
     return `当前刚恢复用电，暂参考上一段活跃期的余额下降记录`;
   }
   if (item.usage.latest_read_at && estimatedDailyUsage(item) != null) {
-    return `有效完整日样本不足，暂按${formatKwhPerDay(estimatedDailyUsage(item))}估算`;
+    return `有效观测不足 24 小时或不足两次下降，暂按 ${formatKwhPerDay(estimatedDailyUsage(item))} 估算。`;
   }
   return "暂无历史读数";
 }
@@ -114,7 +114,7 @@ function remainingHint(item: UserRoomSummary) {
   }
   if (item.usage.days_remaining == null) return "暂无可用估算";
   if (item.usage.days_remaining_source !== "default") return `基于${dailyUsageBasis(item)}估算`;
-  return `基于${dailyUsageBasis(item)}估算，获得足够完整日数据后会自动更新`;
+  return `基于${dailyUsageBasis(item)}估算，有效观测充足后会自动更新`;
 }
 
 function thresholdHint(item: UserRoomSummary) {
