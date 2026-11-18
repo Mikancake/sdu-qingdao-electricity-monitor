@@ -4,6 +4,7 @@ import type { AdminLogQuery } from "../../lib/types";
 
 export const ADMIN_TOKEN_KEY = "sdu-electricity-admin-token";
 export const ADMIN_THEME_KEY = "sdu-electricity-theme";
+export const STUDENT_HOME = window.location.pathname.startsWith("/electricity/") ? "/electricity/" : "/";
 
 export type AdminView = "status" | "users" | "rooms" | "tokens" | "smtp" | "realtime" | "announcements" | "settings" | "account" | "audit";
 export type SortDirection = "asc" | "desc";

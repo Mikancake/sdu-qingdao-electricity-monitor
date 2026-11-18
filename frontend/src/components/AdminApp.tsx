@@ -35,7 +35,7 @@ import { AnnouncementsPanel } from "./admin/AnnouncementsPanel";
 import { HwglProbePanel } from "./admin/HwglProbePanel";
 import { MobileAdminNav } from "./admin/MobileAdminNav";
 import type { AdminNavItem } from "./admin/MobileAdminNav";
-import { ADMIN_THEME_KEY, ADMIN_TOKEN_KEY, DEFAULT_LOG_FILTERS, describeError } from "./admin/utils";
+import { ADMIN_THEME_KEY, ADMIN_TOKEN_KEY, DEFAULT_LOG_FILTERS, STUDENT_HOME, describeError } from "./admin/utils";
 import type { AdminView, LogFilters } from "./admin/utils";
 
 
@@ -565,7 +565,7 @@ function AdminWorkspace({ token, api, initialNotice, darkMode, toggleTheme, hand
   return (
     <div className="app-background min-h-screen text-foreground">
       <aside className="workspace-sidebar fixed inset-y-0 left-0 z-30 hidden w-52 flex-col border-r border-border lg:flex">
-        <a href="/" className="flex min-h-24 items-center gap-3 border-b border-border px-5">
+        <a href={STUDENT_HOME} className="flex min-h-24 items-center gap-3 border-b border-border px-5">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-primary text-xl font-semibold text-primary">E</span>
           <span><span className="block text-sm font-semibold">校园电量</span><span className="mt-1 block text-[10px] tracking-[0.14em] text-muted-foreground">OPERATIONS / SDU</span></span>
         </a>

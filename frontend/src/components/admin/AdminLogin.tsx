@@ -4,7 +4,7 @@ import { Input, Label } from "../ui/input";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, BatteryCharging, Eye, EyeOff, KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
-import { describeError } from "./utils";
+import { describeError, STUDENT_HOME } from "./utils";
 
 export function AdminLogin({ message, onLogin }: { message: string | null; onLogin: (token: string) => void }) {
   const api = useMemo(() => createApiClient(), []);
@@ -23,11 +23,11 @@ export function AdminLogin({ message, onLogin }: { message: string | null; onLog
   return (
     <main className="app-background flex min-h-screen flex-col px-4 py-5 text-foreground sm:px-8 sm:py-9">
       <header className="relative z-[2] mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-4 border border-border bg-panel px-5 py-4 sm:px-7">
-        <a href="/" className="flex items-center gap-3">
+        <a href={STUDENT_HOME} className="flex items-center gap-3">
           <BatteryCharging size={25} strokeWidth={1.5} className="shrink-0 text-primary" />
           <span><span className="block text-sm font-semibold">校园电量监控</span><span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-muted-foreground">SDU Qingdao / Administration</span></span>
         </a>
-        <a href="/" className="flex items-center gap-2 py-1 text-xs text-muted-foreground transition-colors hover:text-primary"><ArrowLeft size={14} />返回电量监控</a>
+        <a href={STUDENT_HOME} className="flex items-center gap-2 py-1 text-xs text-muted-foreground transition-colors hover:text-primary"><ArrowLeft size={14} />返回电量监控</a>
       </header>
 
       <div className="relative z-[2] mx-auto flex w-full max-w-5xl flex-1 items-center py-8 sm:py-14">
@@ -71,7 +71,7 @@ export function AdminLogin({ message, onLogin }: { message: string | null; onLog
                 {error ? <div role="alert" className="border-l-2 border-danger bg-muted p-4 text-sm leading-6 text-danger">{error}</div> : null}
                 <Button aria-busy={loginMutation.isPending} className="h-12 w-full justify-between px-5" disabled={loginMutation.isPending}><span>{loginMutation.isPending ? "正在验证身份…" : "进入工作台"}</span>{loginMutation.isPending ? <Loader2 className="animate-spin" size={17} /> : <ArrowRight size={17} />}</Button>
               </form>
-              <p className="mt-7 border-t border-border pt-5 text-xs leading-6 text-muted-foreground">管理员专属入口<br /><a href="/" className="inline-flex items-center gap-1.5 text-foreground transition-colors hover:text-primary">学生用户请前往电量监控 <ArrowRight size={12} /></a></p>
+              <p className="mt-7 border-t border-border pt-5 text-xs leading-6 text-muted-foreground">管理员专属入口<br /><a href={STUDENT_HOME} className="inline-flex items-center gap-1.5 text-foreground transition-colors hover:text-primary">学生用户请前往电量监控 <ArrowRight size={12} /></a></p>
             </div>
           </section>
         </div>

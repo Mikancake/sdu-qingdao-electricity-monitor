@@ -436,7 +436,7 @@ function ViewLoading() {
 }
 
 export default function App() {
-  if (window.location.pathname === "/admin" || window.location.pathname.startsWith("/admin/")) {
+  if (/^\/(?:electricity\/)?admin(?:\/|$)/.test(window.location.pathname)) {
     return (
       <Suspense fallback={<ViewLoading />}>
         <AdminApp />
