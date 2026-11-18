@@ -1,5 +1,6 @@
 .git
 .gitignore
+backups/
 
 .env
 .env.*
@@ -11,10 +12,13 @@ backend/.env.*
 !backend/.env.example
 !backend/.env.docker.example
 
+backend/.venv
 backend/dev.sqlite3
 backend/*.sqlite3
 backend/uploads
 frontend/.env
+frontend/.env.*
+!frontend/.env.example
 frontend/node_modules
 frontend/dist
 

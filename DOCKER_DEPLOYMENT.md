@@ -539,6 +539,15 @@ docker version
 docker compose version
 ```
 
+**已部署项目的日常重启**（在项目目录，由有权读取生产 env 文件和操作 Docker 的运维账号执行）：
+
+```bash
+bash restart.sh
+# 等价命令：docker compose --env-file .env.docker -f compose.prod.yml restart --no-deps api worker web
+```
+
+这不会重启 PostgreSQL、宿主机 Nginx 或 Docker 守护进程，也不会应用更新后的源码和环境变量。发布新版本需要构建对应镜像并使用 `up -d` 重建容器；若有未应用的数据库迁移，先备份并按升级步骤执行 `migrate`。不要使用旧 systemd 部署的重启脚本操作容器部署。
+
 ---
 
 ## 十、全新部署
@@ -555,7 +564,7 @@ cd /opt/sdu-qingdao-electricity-monitor
 docker compose \
   --env-file .env.docker \
   -f compose.prod.yml \
-  config
+  config -q
 ```
 
 启动 PostgreSQL：

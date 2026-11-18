@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
 
 
-MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_PIXELS = 80_000_000
 PREBLUR_MAX_EDGE = 720
 PREBLUR_RADIUS = 18
 DISPLAY_MAX_EDGE = 2560
