@@ -81,6 +81,8 @@ def _format_daily_usage(stats) -> str:
     if value is None:
         return "暂无（有效样本不足）"
     source = stats.estimated_daily_usage_source
+    if source == "daily_settlement":
+        return f"{_format_value(value, ' 度/天')}（校园卡日结估算，{stats.average_daily_usage_sample_days} 个结算日）"
     suffix = {
         "default": "默认估算",
         "provider_reported_historical": "上一段活跃期参考",
@@ -147,6 +149,7 @@ def _room_card(binding: UserRoom, stats, *, readings_available: bool = True) -> 
         """
     elif stats.average_daily_usage_source not in {
         "measured",
+        "daily_settlement",
         "measured_historical",
         "provider_reported",
         "provider_reported_historical",
@@ -300,6 +303,7 @@ def _build_power_report_email(db: Session, user: User, bindings: list[UserRoom],
             lines.extend(["还没有历史读数，下一次同步后日报会更准确。", ""])
         elif stats.average_daily_usage_source not in {
             "measured",
+            "daily_settlement",
             "measured_historical",
             "provider_reported",
             "provider_reported_historical",

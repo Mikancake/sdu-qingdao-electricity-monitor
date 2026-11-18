@@ -90,7 +90,7 @@ def test_balance_fallback_averages_each_active_day() -> None:
 
     average = calculate_average_daily_usage(readings)
 
-    assert average.source == "measured"
+    assert average.source == "daily_settlement"
     assert average.value == Decimal("4.40")
     assert average.window_hours == Decimal("48")
 
@@ -211,7 +211,7 @@ def test_balance_drop_combines_normal_intervals_on_both_sides_of_recharge() -> N
 
     average = calculate_average_daily_usage(readings)
 
-    assert average.source == "measured"
+    assert average.source == "daily_settlement"
     assert average.value == Decimal(20) / 3
     assert average.window_hours == Decimal("72")
 
@@ -228,9 +228,9 @@ def test_balance_drop_ignores_recharge_and_zero_delta() -> None:
 
     average = calculate_average_daily_usage(readings)
 
-    assert average.source == "measured"
-    # The genuinely flat day still counts; only the day containing the credit is excluded.
-    assert average.value == Decimal(8) / 3
+    assert average.source == "daily_settlement"
+    # The flat interval before the credit has no confirmed settlement.
+    assert average.value == Decimal(4)
     assert average.sample_days == 2
 
 
@@ -240,9 +240,56 @@ def test_repeated_credits_retain_measured_rate_and_update_remaining_balance() ->
               for i, balance in enumerate(["30", "26", "20", "120", "180"])]
     stats = build_usage_stats(points, alert_days=2, alert_threshold_mode="days",
                               fixed_threshold=None, default_daily_usage_kwh=9)
-    assert stats.estimated_daily_usage_source == "measured"
+    assert stats.estimated_daily_usage_source == "daily_settlement"
     assert stats.estimated_daily_usage == 5 and stats.usage_window_hours == 48
     assert stats.latest_balance == 180 and stats.days_remaining == 36 and stats.alert_threshold == 10
+
+
+def test_daily_settlement_unchanged_by_repolls_and_combines_two_day_cycle() -> None:
+    base = datetime(2026, 10, 1, 0)
+    balances = ["50", "46", "46", "36"]
+    def poll(hours):
+        return [reading(day * 24 + h, balance, base + timedelta(days=day, hours=h))
+                for day, balance in enumerate(balances) for h in hours]
+    once = calculate_average_daily_usage(poll([0]))
+    frequent = calculate_average_daily_usage(poll([0, 2, 4, 6, 8, 10]))
+    assert once == frequent
+    assert once.value == Decimal(14) / 3 and once.sample_days == 3
+
+
+def test_same_day_debits_and_then_credit_keep_one_day_of_use() -> None:
+    base = datetime(2026, 10, 1, 0)
+    points = [reading(i, b, base + timedelta(hours=h)) for i, (h, b) in enumerate([
+        (0, "30"), (24, "26"), (26, "25"), (32, "100"), (36, "99")])]
+    result = calculate_average_daily_usage(points)
+    assert result.value == 5 and result.sample_days == 1
+
+
+def test_initial_midnight_crossing_or_long_gap_is_not_a_cycle() -> None:
+    from datetime import timezone
+    base = datetime(2026, 10, 1, 15, 50, tzinfo=timezone.utc)  # 23:50 Shanghai
+    points = [reading(1, "30", base), reading(2, "25", base + timedelta(minutes=20))]
+    assert calculate_average_daily_usage(points).value is None
+    points.append(reading(3, "21", base + timedelta(days=1, minutes=20)))
+    assert calculate_average_daily_usage(points).value == 4
+    points.append(reading(4, "3", base + timedelta(days=5)))
+    assert calculate_average_daily_usage(points).value is None
+
+
+def test_mcard_timeline_not_truncated_by_chart_limit() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        room = Room(id=1, building_name="demo", building_param="demo", room_number="1", provider="mcard")
+        db.add(room)
+        base = datetime.now() - timedelta(days=3)
+        db.add_all([reading(1, "20", base), reading(2, "15", base + timedelta(days=1))])
+        db.add_all(reading(3+i, "15", base+timedelta(days=1, minutes=i+1)) for i in range(220))
+        db.commit()
+        stats, recent = usage.get_room_usage_stats(db, 1, days=5, limit=2, alert_days=1,
+                                                  alert_threshold_mode="days", fixed_threshold=None)
+        assert len(recent) == 2 and stats.average_daily_usage == 5
+        assert stats.days_remaining == 3 and stats.average_daily_usage_sample_days == 1
 
 
 def test_free_grant_hidden_by_larger_paid_balance_drop() -> None:

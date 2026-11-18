@@ -82,6 +82,7 @@ function dailyUsageBasis(item: UserRoomSummary) {
   if (source === "provider_reported") {
     return `上游日均 ${formatted}`;
   }
+  if (source === "daily_settlement") return `校园卡日结估算 ${formatted}`;
   if (source === "measured") {
     return `余额下降实测 ${formatted}`;
   }
@@ -96,6 +97,10 @@ function usageAverageHint(item: UserRoomSummary) {
   if (source === "provider_reported_historical") {
     return `当前刚恢复用电，暂参考上一段活跃期的上游日用电数据`;
   }
+  if (source === "daily_settlement") {
+    const days = item.usage.average_daily_usage_sample_days;
+    return `${days === 1 ? "初估" : "日结估算"} · 基于 ${days} 个已结算日；重复查询不计天数。`;
+  }
   if (source === "measured") {
     return `累计有效观测：${formatUsageWindow(item.usage.usage_window_hours)}；充值、赠电区间不计，之前的用电记录保留。`;
   }
@@ -103,6 +108,7 @@ function usageAverageHint(item: UserRoomSummary) {
     return `当前刚恢复用电，暂参考上一段活跃期的余额下降记录`;
   }
   if (item.usage.latest_read_at && estimatedDailyUsage(item) != null) {
+    if (item.room.provider === "mcard") return "尚无完整日结差，暂用平台默认值。";
     return `有效观测不足 24 小时或不足两次下降，暂按 ${formatKwhPerDay(estimatedDailyUsage(item))} 估算。`;
   }
   return "暂无历史读数";

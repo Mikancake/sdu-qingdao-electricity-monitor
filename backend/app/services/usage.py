@@ -1,9 +1,12 @@
 from bisect import bisect_right
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from itertools import takewhile
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.electricity_reading import ElectricityReading
@@ -150,11 +153,92 @@ def _credit_increase(previous: ElectricityReading, current: ElectricityReading) 
     )
 
 
+_CAMPUS_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass
+class _BalanceLevel:
+    first_seen: datetime
+    balance: Decimal
+
+
+def _mcard_daily_average(newest_first: Iterable[tuple[datetime, Decimal]], history_days: int) -> AverageDailyUsage:
+    """Infer settlement cycles from ordered polls; identical polls never add day-weight."""
+    levels: list[_BalanceLevel] = []
+    scan_until = None
+    for timestamp, balance in newest_first:
+        # PostgreSQL returns aware instants; SQLite's DB-generated read_at is naive UTC.
+        seen = (timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)).astimezone(_CAMPUS_TZ)
+        if levels:
+            newer = levels[-1]
+            if seen == newer.first_seen:  # highest id wins on a tied timestamp
+                continue
+            if newer.first_seen - seen >= timedelta(days=SILENT_DAYS_TO_SPLIT_ACTIVE_PERIOD):
+                break
+            if scan_until is None and balance - newer.balance > QUIET_DAILY_USAGE_KWH:
+                # Anchor to a debit, not today's clock or a subsequent top-up. Fetch
+                # one extra day before the window to seed its opening balance.
+                scan_until = newer.first_seen.date() - timedelta(days=history_days + 1)
+            if scan_until is not None and seen.date() < scan_until:
+                break
+            if balance == newer.balance:
+                newer.first_seen = seen
+                continue
+        levels.append(_BalanceLevel(seen, balance))
+
+    cycles: list[tuple[date, date, Decimal]] = []
+    if levels:
+        anchor = levels.pop()
+        known_settlement = extend_cycle = False
+        for level in reversed(levels):
+            drop = anchor.balance - level.balance
+            if abs(drop) <= BALANCE_INCREASE_TOLERANCE_KWH:
+                continue
+            start, end = anchor.first_seen.date(), level.first_seen.date()
+            if drop < 0:
+                # An unmetered credit: keep completed cycles but never bridge it.
+                known_settlement = extend_cycle = False
+            elif (end - start).days > SILENT_DAYS_TO_SPLIT_ACTIVE_PERIOD:
+                # Three whole unchanged dates between debits: this may be a
+                # vacancy. Start again on recovery, not on a repeated poll.
+                cycles.clear()
+                known_settlement, extend_cycle = True, False
+            elif start != end:
+                # Initial binding or first level after a credit: crossing midnight
+                # alone is not a full cycle. Later flat polls cannot qualify it.
+                extend_cycle = known_settlement or level.first_seen - anchor.first_seen >= timedelta(days=1)
+                if extend_cycle:
+                    cycles.append((start, end, drop))
+                known_settlement = True
+            else:
+                if extend_cycle:
+                    left, right, amount = cycles[-1]
+                    cycles[-1] = (left, right, amount + drop)
+                known_settlement = True
+            anchor = level
+
+    if cycles:
+        cutoff = cycles[-1][1] - timedelta(days=history_days)
+        complete = [(a, b, kwh) for a, b, kwh in cycles if a >= cutoff]
+        if complete:
+            days = sum((b - a).days for a, b, _ in complete)
+            return AverageDailyUsage(
+                value=sum(kwh for _, _, kwh in complete) / days,
+                window_hours=Decimal(days * 24), source="daily_settlement", sample_days=days,
+                basis="已完成日结周期的余额下降总量 / 覆盖天数",
+                active_period_start=complete[0][0], active_period_end=complete[-1][1],
+            )
+    return AverageDailyUsage(None, None, basis="还没有可比较的完整日结周期")
+
+
 def calculate_average_daily_usage(
     readings: list[ElectricityReading], *, credited_at: tuple[datetime, ...] = (),
 ) -> AverageDailyUsage:
     """Estimate from observable intervals; an incoming credit hides one interval, not its history."""
     ordered = _ordered_unique_readings(readings)
+    if ordered and ordered[-1].provider == "mcard":
+        segment = takewhile(lambda row: row.provider == "mcard", reversed(ordered))
+        return _mcard_daily_average(((r.read_at, r.balance) for r in segment), history_days=14)
     credits = sorted(datetime_key(t) for t in credited_at)
     seconds = consumption = quiet = Decimal(0)
     drops = 0
@@ -215,6 +299,7 @@ def build_usage_stats(
     default_daily_usage_kwh: float,
     room_price: Decimal | None = None,
     credited_at: tuple[datetime, ...] = (),
+    measured_average: AverageDailyUsage | None = None,
 ) -> UsageStats:
     threshold_mode = normalize_alert_threshold_mode(
         alert_threshold_mode, fixed_threshold
@@ -242,7 +327,8 @@ def build_usage_stats(
 
     ordered = sorted(readings, key=reading_order_key)
     latest = ordered[-1]
-    measured_average = calculate_average_daily_usage(ordered, credited_at=credited_at)
+    if measured_average is None:
+        measured_average = calculate_average_daily_usage(ordered, credited_at=credited_at)
     effective_average = measured_average.value or Decimal(str(default_daily_usage_kwh))
     average_source = (
         measured_average.source
@@ -326,6 +412,18 @@ def get_room_usage_stats(
     # Limit the newest points before restoring the chronological order used
     # by charts and notification.reading_id (readings[-1]).
     readings.reverse()
+    measured_average = None
+    if current_provider == "mcard" and readings:
+        # The limit on recent readings is for the view, not for the estimator:
+        # 200 polls may represent two weeks, or repeat one single balance.
+        latest = readings[-1]
+        stmt = select(ElectricityReading.read_at, ElectricityReading.balance).where(
+            ElectricityReading.room_id == room_id, ElectricityReading.provider == current_provider,
+            or_(ElectricityReading.read_at < latest.read_at,
+                (ElectricityReading.read_at == latest.read_at) & (ElectricityReading.id <= latest.id)),
+        ).order_by(ElectricityReading.read_at.desc(), ElectricityReading.id.desc())
+        with db.execute(stmt.execution_options(yield_per=128)) as points:
+            measured_average = _mcard_daily_average(points, days or runtime.usage_history_days)
     credited_at: tuple[datetime, ...] = ()
     if current_provider == "hwgl" and len(readings) > 1:
         # Only completed credits are evidence; pending/failed orders and
@@ -346,6 +444,7 @@ def get_room_usage_stats(
             default_daily_usage_kwh=runtime.default_daily_usage_kwh,
             room_price=room.provider_price if room is not None else None,
             credited_at=credited_at,
+            measured_average=measured_average,
         ),
         readings,
     )
